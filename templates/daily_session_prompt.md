@@ -28,6 +28,7 @@ Write:
 
 - `reports/RUN_ID/coach_note.md`
 - `reports/RUN_ID/research_pool.md`
+- `reports/RUN_ID/xueqiu_post.md`
 - optional `reports/RUN_ID/trade_plan.md` only after the user chooses no more than three names.
 
 Then render:
@@ -35,6 +36,7 @@ Then render:
 ```bash
 python3 scripts/render_markdown.py reports/RUN_ID/coach_note.md -o reports/RUN_ID/coach_note.html --title "每日教练手记"
 python3 scripts/render_markdown.py reports/RUN_ID/research_pool.md -o reports/RUN_ID/research_pool.html --title "明日研究股票池"
+python3 scripts/render_markdown.py reports/RUN_ID/xueqiu_post.md -o reports/RUN_ID/xueqiu_post.html --title "雪球复盘草稿"
 ```
 
 Update private state after writing the note:

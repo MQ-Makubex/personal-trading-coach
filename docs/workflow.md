@@ -23,7 +23,8 @@ The main artifact is a coach-written Markdown note. Scripts support the coach by
 5. Update personal trading modes conservatively. A single profitable trade cannot become a reusable mode.
 6. Update coach memory with recurring execution errors, emotional triggers, and training focus.
 7. Build tomorrow's research pool using `templates/research_pool.md`.
-8. Render the coach note to HTML for reading.
+8. Write a Xueqiu-ready review and tomorrow plan draft using `templates/xueqiu_post.md`.
+9. Render Markdown artifacts to HTML for reading.
 
 ## Pre-Market And Intraday Coach Flow
 

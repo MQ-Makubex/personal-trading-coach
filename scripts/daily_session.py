@@ -163,6 +163,7 @@ def build_session_index(run_dir: Path, run_id: str, trade_date: str, trades_csv:
         "- `coach_note.md`",
         "- `research_pool.md`",
         "- `trade_plan.md`",
+        "- `xueqiu_post.md`",
         "- `daily_session_prompt.md`",
         "",
         "## 下一步",
@@ -214,12 +215,14 @@ def prepare_session(args: argparse.Namespace) -> Path:
     copy_template("coach_lens_check.md", run_dir / "coach_lens_check.md", args.trade_date, run_id)
     copy_template("research_pool.md", run_dir / "research_pool.md", args.trade_date, run_id)
     copy_template("trade_plan.md", run_dir / "trade_plan.md", args.trade_date, run_id)
+    copy_template("xueqiu_post.md", run_dir / "xueqiu_post.md", args.trade_date, run_id)
     copy_template("daily_session_prompt.md", run_dir / "daily_session_prompt.md", args.trade_date, run_id)
 
     index_md = build_session_index(run_dir, run_id, args.trade_date, trades_csv)
     render_to_html(index_md, run_dir / "index.html", "盘后教练 Session")
     render_to_html(run_dir / "coach_note.md", run_dir / "coach_note.html", "每日教练手记")
     render_to_html(run_dir / "research_pool.md", run_dir / "research_pool.html", "明日研究股票池")
+    render_to_html(run_dir / "xueqiu_post.md", run_dir / "xueqiu_post.html", "雪球复盘草稿")
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest.update(
@@ -236,6 +239,7 @@ def prepare_session(args: argparse.Namespace) -> Path:
             "coach_lens_check": str(run_dir / "coach_lens_check.md"),
             "research_pool": str(run_dir / "research_pool.md"),
             "trade_plan": str(run_dir / "trade_plan.md"),
+            "xueqiu_post": str(run_dir / "xueqiu_post.md"),
             "index_html": str(run_dir / "index.html"),
         }
     )

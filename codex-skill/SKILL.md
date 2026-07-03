@@ -25,6 +25,7 @@ Read templates only when producing that artifact:
 - `templates/evidence_packet.md` for evidence packets.
 - `templates/research_pool.md` for tomorrow research pools.
 - `templates/trade_plan.md` for conditional trade plans.
+- `templates/xueqiu_post.md` for a Xueqiu-ready daily review and tomorrow plan draft.
 
 Read private state files when they exist:
 
