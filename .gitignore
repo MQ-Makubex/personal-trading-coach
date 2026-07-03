@@ -1,0 +1,35 @@
+# Raw broker statements and screenshots
+*.pdf
+*.xlsx
+*.xls
+*.csv
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.heic
+
+# Private runtime data
+state/**
+reports/**
+private/**
+local_outputs/**
+local_state/**
+
+# Databases and structured outputs that may contain private trading facts
+*.sqlite
+*.sqlite3
+*.db
+*.json
+*.html
+*.md.html
+
+# Python/build noise
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Keep private directory placeholders
+!state/.gitkeep
+!reports/.gitkeep
+!private/.gitkeep

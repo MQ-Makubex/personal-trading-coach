@@ -1,0 +1,63 @@
+# Privacy Boundary
+
+This project is local-first. Real statements, screenshots, raw pasted broker text, generated ledgers, coach notes, and reports belong in ignored private directories.
+
+## Never Commit
+
+- raw PDF statements;
+- raw CSV/XLSX broker exports;
+- screenshots of trades or accounts;
+- raw pasted broker text;
+- generated account ledger files;
+- generated coach notes and reports;
+- files containing name, ID card, phone number, fund account, customer ID, shareholder account, bank card, branch, address, or cash balance.
+
+## Allowed Trade Facts
+
+The long-term ledger may keep only:
+
+- trade date;
+- trade time;
+- stock code;
+- stock name;
+- side;
+- quantity;
+- price;
+- amount;
+- net amount;
+- commission;
+- stamp tax;
+- transfer fee;
+- other fee.
+
+## Forbidden Fields
+
+Remove or reject:
+
+- name;
+- ID card;
+- phone number;
+- fund account;
+- customer ID;
+- shareholder account;
+- bank card;
+- broker branch;
+- home or contact address;
+- cash balance;
+- account balance;
+- raw remarks that contain account identifiers.
+
+## Git Rule
+
+The repository commits only rules, docs, templates, and scripts. The directories `state/`, `reports/`, and `private/` are ignored except for `.gitkeep` placeholders.
+
+Before any commit, run:
+
+```bash
+git status --short
+git diff --cached --stat
+git diff --cached --name-only
+git diff --cached
+```
+
+Confirm no real trading data, no raw statement, no account identifier, and no cash-balance field is staged.
