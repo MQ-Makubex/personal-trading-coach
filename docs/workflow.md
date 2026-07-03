@@ -134,3 +134,21 @@ During coaching, read these files before judgment and update them after the coac
 Coach notes should lead with judgment, then evidence. Avoid generic "无法判断" blocks. Use `无法判断` only when a specific conclusion truly lacks evidence.
 
 For severe rule violations, use the `教练语气级别` from `CONTEXT.md`: normal review, discipline reminder, red-card warning, or trading pause.
+
+## Finalize Session
+
+After the coach has rewritten `coach_note.md`, `research_pool.md`, and `xueqiu_post.md`, run:
+
+```bash
+python3 scripts/finalize_session.py reports/run_YYYYMMDD_HHMMSS --strict
+```
+
+The finalizer:
+
+- renders Markdown files to HTML;
+- creates `state_update_checklist.md`;
+- checks required coach-note sections;
+- warns if template placeholders remain;
+- fails if direct buy/sell/position instructions or price predictions appear.
+
+Warnings mean the coach note may still be too generic. Errors must be fixed before treating the session as complete.

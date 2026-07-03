@@ -75,4 +75,5 @@ Confirm no real trading data, no raw statement, no account identifier, and no ca
 - `scripts/article_digest.py` stores article URL/title/summary and narrative-pollution checks, not full article text.
 - `scripts/market_snapshot.py` collects public market facts or explicit offline placeholders; it must not store private account data.
 - `scripts/research_pool_builder.py` builds a research-only candidate pool from local market/universe CSV; it must not label output as recommendations.
+- `scripts/finalize_session.py` validates local session notes and renders HTML; outputs remain under ignored `reports/`.
 - `scripts/init_state.py` creates private continuity files under `state/`; those files are ignored and must not be committed.
