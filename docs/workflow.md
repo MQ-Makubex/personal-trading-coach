@@ -57,6 +57,16 @@ Each research-pool iteration should record:
 - why the name is not yet a plan;
 - post-trade validation result.
 
+Market fact and research-pool commands:
+
+```bash
+python3 scripts/market_snapshot.py --trade-date YYYY-MM-DD --user-view private/market_view.txt --json reports/market_snapshot.json --md reports/market_snapshot.md
+python3 scripts/research_pool_builder.py private/candidate_universe.csv --trade-date YYYY-MM-DD --md reports/research_pool_candidates.md
+python3 scripts/daily_session.py --trade-date YYYY-MM-DD --pasted-trades private/raw_pasted_trades.txt --market-snapshot reports/market_snapshot.md --research-pool reports/research_pool_candidates.md
+```
+
+If联网失败, market snapshot must state `市场背景未联网验证`; the coach must not invent missing market facts.
+
 ## Account Ledger Flow
 
 Historical broker statements should be sanitized, parsed, deduplicated, and merged into the account ledger. The ledger may answer factual questions such as:

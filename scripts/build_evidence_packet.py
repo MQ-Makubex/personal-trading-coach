@@ -72,6 +72,8 @@ def build_packet(args: argparse.Namespace) -> str:
     market_view = read_text(args.market_view)
     articles = read_text(args.articles)
     current_positions = read_text(args.positions)
+    market_snapshot = read_text(getattr(args, "market_snapshot", None))
+    research_pool = read_text(getattr(args, "research_pool", None))
 
     lines = [
         f"# Evidence Packet - {args.trade_date}",
@@ -95,6 +97,10 @@ def build_packet(args: argparse.Namespace) -> str:
         "",
         market_view or "未提供。",
         "",
+        "## Market Snapshot",
+        "",
+        market_snapshot or "未提供。需要联网或用户提供市场事实后再校正。",
+        "",
         "## Current Positions",
         "",
         current_positions or "未提供。",
@@ -102,6 +108,10 @@ def build_packet(args: argparse.Namespace) -> str:
         "## Article Inputs",
         "",
         articles or "未提供。",
+        "",
+        "## Research Pool Input",
+        "",
+        research_pool or "未提供。",
         "",
         "## Coach Work Required",
         "",
@@ -122,6 +132,8 @@ def main() -> int:
     parser.add_argument("--market-view", type=Path, default=None)
     parser.add_argument("--articles", type=Path, default=None)
     parser.add_argument("--positions", type=Path, default=None)
+    parser.add_argument("--market-snapshot", type=Path, default=None)
+    parser.add_argument("--research-pool", type=Path, default=None)
     parser.add_argument("-o", "--output", type=Path, default=Path("reports/evidence_packet.md"))
     args = parser.parse_args()
 

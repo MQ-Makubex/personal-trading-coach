@@ -12,6 +12,8 @@ Read:
 - `reports/RUN_ID/evidence_packet.md`
 - `reports/RUN_ID/article_digest.md`
 - `reports/RUN_ID/market_correction.md`
+- optional `reports/RUN_ID/market_snapshot.md`
+- optional `reports/RUN_ID/research_pool_candidates.md`
 - `state/coach_memory.md`
 - `state/position_storylines.md`
 - `state/personal_trading_modes.md`

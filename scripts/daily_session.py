@@ -183,6 +183,14 @@ def prepare_session(args: argparse.Namespace) -> Path:
 
     article_digest = build_article_digest(args, run_dir, run_id)
     market_correction = build_market_correction(args, run_dir, run_id)
+    market_snapshot = None
+    research_pool = None
+    if args.market_snapshot:
+        market_snapshot = run_dir / "market_snapshot.md"
+        shutil.copyfile(args.market_snapshot, market_snapshot)
+    if args.research_pool:
+        research_pool = run_dir / "research_pool_candidates.md"
+        shutil.copyfile(args.research_pool, research_pool)
 
     evidence_args = SimpleNamespace(
         trades=trades_csv,
@@ -191,6 +199,8 @@ def prepare_session(args: argparse.Namespace) -> Path:
         market_view=args.market_view,
         articles=article_digest,
         positions=args.positions,
+        market_snapshot=market_snapshot,
+        research_pool=research_pool,
         output=run_dir / "evidence_packet.md",
     )
     write_text(evidence_args.output, build_packet(evidence_args))
@@ -214,6 +224,8 @@ def prepare_session(args: argparse.Namespace) -> Path:
             "evidence_packet": str(evidence_args.output),
             "article_digest": str(article_digest),
             "market_correction": str(market_correction),
+            "market_snapshot": str(market_snapshot) if market_snapshot else None,
+            "research_pool_candidates": str(research_pool) if research_pool else None,
             "coach_note": str(run_dir / "coach_note.md"),
             "research_pool": str(run_dir / "research_pool.md"),
             "trade_plan": str(run_dir / "trade_plan.md"),
@@ -234,6 +246,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--article-urls", type=Path, default=None)
     parser.add_argument("--article-excerpt", type=Path, default=None)
     parser.add_argument("--positions", type=Path, default=None)
+    parser.add_argument("--market-snapshot", type=Path, default=None)
+    parser.add_argument("--research-pool", type=Path, default=None)
     parser.add_argument("--strict-balance", action="store_true")
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--run-dir", type=Path, default=None)

@@ -81,6 +81,8 @@ python3 scripts/init_state.py
 python3 scripts/daily_session.py --trade-date YYYY-MM-DD --pasted-trades private/raw_pasted_trades.txt --journal private/journal.txt --market-view private/market_view.txt
 python3 scripts/normalize_statement.py private/history_statement.csv -o reports/normalized_trades.csv
 python3 scripts/daily_session.py --trade-date YYYY-MM-DD --trades-csv reports/normalized_trades.csv --journal private/journal.txt --market-view private/market_view.txt
+python3 scripts/market_snapshot.py --trade-date YYYY-MM-DD --user-view private/market_view.txt --json reports/market_snapshot.json --md reports/market_snapshot.md
+python3 scripts/research_pool_builder.py private/candidate_universe.csv --trade-date YYYY-MM-DD --md reports/research_pool_candidates.md
 python3 scripts/parse_pasted_trades.py private/raw_pasted_trades.txt -o reports/pasted_trades_extracted.csv --trade-date YYYY-MM-DD
 python3 scripts/privacy_guard.py reports/pasted_trades_extracted.csv --report reports/privacy_guard_report.json
 python3 scripts/ledger_import.py reports/pasted_trades_extracted.csv
