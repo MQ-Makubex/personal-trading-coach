@@ -63,6 +63,10 @@ def render_to_html(markdown_path: Path, html_path: Path, title: str) -> None:
 
 
 def build_article_digest(args: argparse.Namespace, run_dir: Path, run_id: str) -> Path:
+    if args.article_digest:
+        output = run_dir / "article_digest.md"
+        shutil.copyfile(args.article_digest, output)
+        return output
     template = (TEMPLATES_DIR / "article_digest.md").read_text(encoding="utf-8")
     article_urls = read_optional(args.article_urls)
     article_excerpt = read_optional(args.article_excerpt)
@@ -245,6 +249,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--market-view", type=Path, default=None)
     parser.add_argument("--article-urls", type=Path, default=None)
     parser.add_argument("--article-excerpt", type=Path, default=None)
+    parser.add_argument("--article-digest", type=Path, default=None)
     parser.add_argument("--positions", type=Path, default=None)
     parser.add_argument("--market-snapshot", type=Path, default=None)
     parser.add_argument("--research-pool", type=Path, default=None)

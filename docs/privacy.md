@@ -72,6 +72,7 @@ Confirm no real trading data, no raw statement, no account identifier, and no ca
 - `scripts/build_evidence_packet.py` creates coach-readable evidence; the coach still writes the judgment directly.
 - `scripts/daily_session.py` prepares one ignored run directory with evidence, prompts, drafts, and rendered placeholders.
 - `scripts/pre_trade_guard.py` creates plan-consistency and red-card questions for pre-trade or intraday use.
+- `scripts/article_digest.py` stores article URL/title/summary and narrative-pollution checks, not full article text.
 - `scripts/market_snapshot.py` collects public market facts or explicit offline placeholders; it must not store private account data.
 - `scripts/research_pool_builder.py` builds a research-only candidate pool from local market/universe CSV; it must not label output as recommendations.
 - `scripts/init_state.py` creates private continuity files under `state/`; those files are ignored and must not be committed.

@@ -61,11 +61,12 @@ Market fact and research-pool commands:
 
 ```bash
 python3 scripts/market_snapshot.py --trade-date YYYY-MM-DD --user-view private/market_view.txt --json reports/market_snapshot.json --md reports/market_snapshot.md
+python3 scripts/article_digest.py --trade-date YYYY-MM-DD --text-file private/article_excerpt.txt --affected-trade "是否影响当天交易动作" --json reports/article_digest.json --md reports/article_digest.md
 python3 scripts/research_pool_builder.py private/candidate_universe.csv --trade-date YYYY-MM-DD --md reports/research_pool_candidates.md
-python3 scripts/daily_session.py --trade-date YYYY-MM-DD --pasted-trades private/raw_pasted_trades.txt --market-snapshot reports/market_snapshot.md --research-pool reports/research_pool_candidates.md
+python3 scripts/daily_session.py --trade-date YYYY-MM-DD --pasted-trades private/raw_pasted_trades.txt --market-snapshot reports/market_snapshot.md --research-pool reports/research_pool_candidates.md --article-digest reports/article_digest.md
 ```
 
-If联网失败, market snapshot must state `市场背景未联网验证`; the coach must not invent missing market facts.
+如果联网失败，market snapshot 必须写明 `市场背景未联网验证`；教练不得编造缺失的市场事实。
 
 ## Account Ledger Flow
 
