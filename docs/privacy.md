@@ -69,3 +69,4 @@ Confirm no real trading data, no raw statement, no account identifier, and no ca
 - `scripts/ledger_import.py` accepts only standard trade-fact CSV files that have passed privacy checks.
 - `scripts/ledger_query.py` answers factual ledger questions only.
 - `scripts/build_evidence_packet.py` creates coach-readable evidence; the coach still writes the judgment directly.
+- `scripts/init_state.py` creates private continuity files under `state/`; those files are ignored and must not be committed.

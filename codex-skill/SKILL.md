@@ -26,6 +26,14 @@ Read templates only when producing that artifact:
 - `templates/research_pool.md` for tomorrow research pools.
 - `templates/trade_plan.md` for conditional trade plans.
 
+Read private state files when they exist:
+
+- `state/coach_memory.md`
+- `state/position_storylines.md`
+- `state/personal_trading_modes.md`
+- `state/research_pool_protocol.md`
+- `state/decision_events.md`
+
 ## Default Behavior
 
 When the user invokes `$personal-trading-coach` or asks for the trading coach, do not output a long tutorial. Determine the mode from the message:
@@ -69,6 +77,7 @@ The ledger may store only trade facts: date, time, stock code, stock name, side,
 Use scripts as evidence tools, not as the coach's judgment engine:
 
 ```bash
+python3 scripts/init_state.py
 python3 scripts/parse_pasted_trades.py private/raw_pasted_trades.txt -o reports/pasted_trades_extracted.csv --trade-date YYYY-MM-DD
 python3 scripts/privacy_guard.py reports/pasted_trades_extracted.csv --report reports/privacy_guard_report.json
 python3 scripts/ledger_import.py reports/pasted_trades_extracted.csv

@@ -17,7 +17,7 @@ The main artifact is a coach-written Markdown note. Scripts support the coach by
 ## Post-Market Coach Flow
 
 1. Build or update the evidence packet from sanitized trade facts and user context.
-2. Read `CONTEXT.md`, open position storylines, coach memory, personal trading modes, and the latest research-pool protocol.
+2. Read `CONTEXT.md`, open position storylines, coach memory, personal trading modes, decision events, and the latest research-pool protocol.
 3. Write the daily coach note directly in Markdown using `templates/coach_note.md`.
 4. Update position storylines: identify whether each action continued a plan, corrected an error, increased risk, or showed emotional deformation.
 5. Update personal trading modes conservatively. A single profitable trade cannot become a reusable mode.
@@ -77,6 +77,24 @@ python3 scripts/build_evidence_packet.py --trades reports/pasted_trades_extracte
 ```
 
 All command outputs above are ignored by Git except the scripts themselves.
+
+## Private State Files
+
+Initialize private state once:
+
+```bash
+python3 scripts/init_state.py
+```
+
+This creates ignored files under `state/`:
+
+- `state/coach_memory.md`
+- `state/position_storylines.md`
+- `state/personal_trading_modes.md`
+- `state/research_pool_protocol.md`
+- `state/decision_events.md`
+
+During coaching, read these files before judgment and update them after the coach note. Do not commit them.
 
 ## Output Discipline
 
