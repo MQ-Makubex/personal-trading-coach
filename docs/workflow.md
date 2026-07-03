@@ -78,6 +78,14 @@ Recommended local commands:
 python3 scripts/daily_session.py --trade-date YYYY-MM-DD --pasted-trades private/raw_pasted_trades.txt --journal private/journal.txt --market-view private/market_view.txt
 ```
 
+For historical CSV/XLSX exports:
+
+```bash
+python3 scripts/normalize_statement.py private/history_statement.csv -o reports/normalized_trades.csv
+python3 scripts/privacy_guard.py reports/normalized_trades.csv --report reports/privacy_guard_report.json
+python3 scripts/daily_session.py --trade-date YYYY-MM-DD --trades-csv reports/normalized_trades.csv --journal private/journal.txt --market-view private/market_view.txt
+```
+
 Manual lower-level commands:
 
 ```bash

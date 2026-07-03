@@ -65,6 +65,7 @@ Confirm no real trading data, no raw statement, no account identifier, and no ca
 ## Script Boundary
 
 - `scripts/parse_pasted_trades.py` reads raw pasted text only from an ignored private path and emits standard trade facts.
+- `scripts/normalize_statement.py` normalizes broker CSV/XLSX exports into standard trade facts; XLSX support requires optional `openpyxl`.
 - `scripts/privacy_guard.py` must run before trade facts enter the ledger.
 - `scripts/ledger_import.py` accepts only standard trade-fact CSV files that have passed privacy checks.
 - `scripts/ledger_query.py` answers factual ledger questions only.

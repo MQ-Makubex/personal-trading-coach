@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import shutil
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -38,6 +40,11 @@ def read_optional(path: Path | None) -> str:
 def write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+
+
+def count_csv_rows(path: Path) -> int:
+    with path.open(newline="", encoding="utf-8") as handle:
+        return sum(1 for _ in csv.DictReader(handle))
 
 
 def replace_date_and_run(text: str, trade_date: str, run_id: str) -> str:
@@ -85,16 +92,27 @@ def build_market_correction(args: argparse.Namespace, run_dir: Path, run_id: str
 def parse_and_check_trades(args: argparse.Namespace, run_dir: Path) -> tuple[Path | None, Path]:
     manifest: dict[str, object] = {"trade_source": None, "privacy_status": "not_run"}
     manifest_path = run_dir / "session_manifest.json"
-    if not args.pasted_trades:
+    if args.pasted_trades and args.trades_csv:
+        raise ValueError("只能选择一种交易输入：--pasted-trades 或 --trades-csv。")
+    if not args.pasted_trades and not args.trades_csv:
         write_text(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2))
         return None, manifest_path
 
-    raw_text = args.pasted_trades.read_text(encoding="utf-8")
-    rows, parse_report = parse_text(raw_text, args.trade_date)
-    trades_csv = run_dir / "pasted_trades_extracted.csv"
-    parse_report_path = run_dir / "pasted_trades_parse_report.json"
-    write_csv(rows, trades_csv)
-    write_text(parse_report_path, json.dumps(parse_report, ensure_ascii=False, indent=2))
+    parse_report_path: Path | None = None
+    if args.trades_csv:
+        trades_csv = run_dir / "input_trades.csv"
+        shutil.copyfile(args.trades_csv, trades_csv)
+        row_count = count_csv_rows(trades_csv)
+        trade_source = "standard_trades_csv"
+    else:
+        raw_text = args.pasted_trades.read_text(encoding="utf-8")
+        rows, parse_report = parse_text(raw_text, args.trade_date)
+        trades_csv = run_dir / "pasted_trades_extracted.csv"
+        parse_report_path = run_dir / "pasted_trades_parse_report.json"
+        write_csv(rows, trades_csv)
+        write_text(parse_report_path, json.dumps(parse_report, ensure_ascii=False, indent=2))
+        row_count = len(rows)
+        trade_source = "pasted_trades"
 
     privacy_report = scan_csv(trades_csv, strict_balance=args.strict_balance)
     privacy_report_path = run_dir / "privacy_guard_report.json"
@@ -102,10 +120,10 @@ def parse_and_check_trades(args: argparse.Namespace, run_dir: Path) -> tuple[Pat
 
     manifest.update(
         {
-            "trade_source": "pasted_trades",
-            "trade_rows": len(rows),
+            "trade_source": trade_source,
+            "trade_rows": row_count,
             "trades_csv": str(trades_csv),
-            "parse_report": str(parse_report_path),
+            "parse_report": str(parse_report_path) if parse_report_path else None,
             "privacy_report": str(privacy_report_path),
             "privacy_status": privacy_report.get("status"),
             "privacy_errors": len(privacy_report.get("errors", [])),
@@ -210,6 +228,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="准备一次盘后教练 session。输出在 reports/run_*，不会进入 Git。")
     parser.add_argument("--trade-date", required=True)
     parser.add_argument("--pasted-trades", type=Path, default=None, help="粘贴交割单文本文件，建议放在 private/。")
+    parser.add_argument("--trades-csv", type=Path, default=None, help="已标准化的交易事实 CSV。")
     parser.add_argument("--journal", type=Path, default=None)
     parser.add_argument("--market-view", type=Path, default=None)
     parser.add_argument("--article-urls", type=Path, default=None)
