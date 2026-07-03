@@ -37,6 +37,12 @@ The main artifact is a coach-written Markdown note. Scripts support the coach by
    - 红牌动作
 5. Do not tell the user to buy or sell. Ask the risk-control question that forces the user to decide against the plan.
 
+Local guard command:
+
+```bash
+python3 scripts/pre_trade_guard.py --security "证券代码 证券名称" --action "拟执行动作" --trigger "触发条件" --invalidation "失效条件" --stop-anchor "止损锚点" --plan reports/run_*/trade_plan.md --html reports/pre_trade_guard.html
+```
+
 ## Research Pool Evolution
 
 The research pool is not a recommendation list. It is a training surface for pattern selection. Early stage is coach-led: the coach proposes candidate baskets, exclusion rules, and risk filters. Over time the user takes more screening responsibility as evidence accumulates.
@@ -67,6 +73,12 @@ Historical broker statements should be sanitized, parsed, deduplicated, and merg
 The ledger must not store identity information, account identifiers, fund balances, branch names, addresses, or raw statement files.
 
 Recommended local commands:
+
+```bash
+python3 scripts/daily_session.py --trade-date YYYY-MM-DD --pasted-trades private/raw_pasted_trades.txt --journal private/journal.txt --market-view private/market_view.txt
+```
+
+Manual lower-level commands:
 
 ```bash
 python3 scripts/parse_pasted_trades.py private/raw_pasted_trades.txt -o reports/pasted_trades_extracted.csv --trade-date YYYY-MM-DD
