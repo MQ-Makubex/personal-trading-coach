@@ -61,3 +61,11 @@ git diff --cached
 ```
 
 Confirm no real trading data, no raw statement, no account identifier, and no cash-balance field is staged.
+
+## Script Boundary
+
+- `scripts/parse_pasted_trades.py` reads raw pasted text only from an ignored private path and emits standard trade facts.
+- `scripts/privacy_guard.py` must run before trade facts enter the ledger.
+- `scripts/ledger_import.py` accepts only standard trade-fact CSV files that have passed privacy checks.
+- `scripts/ledger_query.py` answers factual ledger questions only.
+- `scripts/build_evidence_packet.py` creates coach-readable evidence; the coach still writes the judgment directly.

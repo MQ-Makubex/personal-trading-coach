@@ -66,6 +66,18 @@ Historical broker statements should be sanitized, parsed, deduplicated, and merg
 
 The ledger must not store identity information, account identifiers, fund balances, branch names, addresses, or raw statement files.
 
+Recommended local commands:
+
+```bash
+python3 scripts/parse_pasted_trades.py private/raw_pasted_trades.txt -o reports/pasted_trades_extracted.csv --trade-date YYYY-MM-DD
+python3 scripts/privacy_guard.py reports/pasted_trades_extracted.csv --report reports/privacy_guard_report.json
+python3 scripts/ledger_import.py reports/pasted_trades_extracted.csv
+python3 scripts/ledger_query.py summary
+python3 scripts/build_evidence_packet.py --trades reports/pasted_trades_extracted.csv --trade-date YYYY-MM-DD --journal private/journal.txt --market-view private/market_view.txt -o reports/evidence_packet.md
+```
+
+All command outputs above are ignored by Git except the scripts themselves.
+
 ## Output Discipline
 
 Coach notes should lead with judgment, then evidence. Avoid generic "无法判断" blocks. Use `无法判断` only when a specific conclusion truly lacks evidence.

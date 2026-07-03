@@ -64,6 +64,18 @@ Private user data belongs under the project root and must stay ignored by Git:
 
 The ledger may store only trade facts: date, time, stock code, stock name, side, quantity, price, amount, net amount, commission, stamp tax, transfer fee, and other fee.
 
+## Local Scripts
+
+Use scripts as evidence tools, not as the coach's judgment engine:
+
+```bash
+python3 scripts/parse_pasted_trades.py private/raw_pasted_trades.txt -o reports/pasted_trades_extracted.csv --trade-date YYYY-MM-DD
+python3 scripts/privacy_guard.py reports/pasted_trades_extracted.csv --report reports/privacy_guard_report.json
+python3 scripts/ledger_import.py reports/pasted_trades_extracted.csv
+python3 scripts/ledger_query.py summary
+python3 scripts/build_evidence_packet.py --trades reports/pasted_trades_extracted.csv --trade-date YYYY-MM-DD --journal private/journal.txt --market-view private/market_view.txt -o reports/evidence_packet.md
+```
+
 ## Rendering
 
 After writing a Markdown coach note, render it with:
