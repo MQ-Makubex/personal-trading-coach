@@ -152,3 +152,11 @@ The finalizer:
 - fails if direct buy/sell/position instructions or price predictions appear.
 
 Warnings mean the coach note may still be too generic. Errors must be fixed before treating the session as complete.
+
+After review, append approved state snippets with:
+
+```bash
+python3 scripts/append_state_update.py decision_events.md --update reports/run_YYYYMMDD_HHMMSS/state_update_decision_events.md --trade-date YYYY-MM-DD --source reports/run_YYYYMMDD_HHMMSS/coach_note.md
+```
+
+Only append reviewed snippets. Do not use this script to generate judgment.
