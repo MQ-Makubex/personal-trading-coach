@@ -159,6 +159,7 @@ def build_session_index(run_dir: Path, run_id: str, trade_date: str, trades_csv:
         "- `evidence_packet.md`",
         "- `article_digest.md`",
         "- `market_correction.md`",
+        "- `coach_lens_check.md`",
         "- `coach_note.md`",
         "- `research_pool.md`",
         "- `trade_plan.md`",
@@ -210,6 +211,7 @@ def prepare_session(args: argparse.Namespace) -> Path:
     write_text(evidence_args.output, build_packet(evidence_args))
 
     copy_template("coach_note.md", run_dir / "coach_note.md", args.trade_date, run_id)
+    copy_template("coach_lens_check.md", run_dir / "coach_lens_check.md", args.trade_date, run_id)
     copy_template("research_pool.md", run_dir / "research_pool.md", args.trade_date, run_id)
     copy_template("trade_plan.md", run_dir / "trade_plan.md", args.trade_date, run_id)
     copy_template("daily_session_prompt.md", run_dir / "daily_session_prompt.md", args.trade_date, run_id)
@@ -231,6 +233,7 @@ def prepare_session(args: argparse.Namespace) -> Path:
             "market_snapshot": str(market_snapshot) if market_snapshot else None,
             "research_pool_candidates": str(research_pool) if research_pool else None,
             "coach_note": str(run_dir / "coach_note.md"),
+            "coach_lens_check": str(run_dir / "coach_lens_check.md"),
             "research_pool": str(run_dir / "research_pool.md"),
             "trade_plan": str(run_dir / "trade_plan.md"),
             "index_html": str(run_dir / "index.html"),

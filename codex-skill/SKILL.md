@@ -29,6 +29,7 @@ Read templates only when producing that artifact:
 Read private state files when they exist:
 
 - `state/coach_memory.md`
+- `state/coach_lenses.md`
 - `state/position_storylines.md`
 - `state/personal_trading_modes.md`
 - `state/research_pool_protocol.md`

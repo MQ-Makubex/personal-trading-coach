@@ -120,6 +120,7 @@ python3 scripts/init_state.py
 This creates ignored files under `state/`:
 
 - `state/coach_memory.md`
+- `state/coach_lenses.md`
 - `state/position_storylines.md`
 - `state/personal_trading_modes.md`
 - `state/research_pool_protocol.md`

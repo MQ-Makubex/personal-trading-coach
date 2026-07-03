@@ -14,7 +14,9 @@ Read:
 - `reports/RUN_ID/market_correction.md`
 - optional `reports/RUN_ID/market_snapshot.md`
 - optional `reports/RUN_ID/research_pool_candidates.md`
+- `reports/RUN_ID/coach_lens_check.md`
 - `state/coach_memory.md`
+- `state/coach_lenses.md`
 - `state/position_storylines.md`
 - `state/personal_trading_modes.md`
 - `state/research_pool_protocol.md`

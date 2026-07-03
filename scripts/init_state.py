@@ -15,6 +15,7 @@ DEFAULT_STATE_DIR = ROOT / "state"
 
 STATE_FILES = [
     "coach_memory.md",
+    "coach_lenses.md",
     "position_storylines.md",
     "personal_trading_modes.md",
     "research_pool_protocol.md",
