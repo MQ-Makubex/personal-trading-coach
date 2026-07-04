@@ -65,6 +65,7 @@ Confirm no real trading data, no raw statement, no account identifier, and no ca
 ## Script Boundary
 
 - `scripts/parse_pasted_trades.py` reads raw pasted text only from an ignored private path and emits standard trade facts.
+- `scripts/sanitize_pdf_statement.py` extracts only sanitized trade facts from local text-based PDFs; it does not print PDF text and does not store the raw PDF in the repository.
 - `scripts/normalize_statement.py` normalizes broker CSV/XLSX exports into standard trade facts; XLSX support requires optional `openpyxl`.
 - `scripts/daily_prepare.py` copies daily user inputs into ignored private run input files and prepares one local session.
 - `scripts/privacy_guard.py` must run before trade facts enter the ledger.

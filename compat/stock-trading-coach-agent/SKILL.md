@@ -59,6 +59,7 @@ Use the new mode selection:
 ```bash
 cd /Users/makubex/Documents/Trading/personal-trading-coach
 python3 scripts/daily_prepare.py --trade-date YYYY-MM-DD --pasted-trades-file private/raw_pasted_trades.txt --journal-file private/journal.txt --market-view-file private/market_view.txt
+python3 scripts/sanitize_pdf_statement.py private/history_statement.pdf -o reports/sanitized_pdf_trades.csv --report reports/sanitize_pdf_report.json
 python3 scripts/finalize_session.py reports/run_YYYYMMDD_HHMMSS --strict
 python3 scripts/draft_state_updates.py reports/run_YYYYMMDD_HHMMSS --require-finalize-ok
 python3 scripts/ledger_query.py summary

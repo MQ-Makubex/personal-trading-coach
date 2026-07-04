@@ -120,6 +120,16 @@ python3 scripts/privacy_guard.py reports/normalized_trades.csv --report reports/
 python3 scripts/daily_session.py --trade-date YYYY-MM-DD --trades-csv reports/normalized_trades.csv --journal private/journal.txt --market-view private/market_view.txt
 ```
 
+For text-based PDF statements:
+
+```bash
+python3 scripts/sanitize_pdf_statement.py private/history_statement.pdf -o reports/sanitized_pdf_trades.csv --report reports/sanitize_pdf_report.json
+python3 scripts/privacy_guard.py reports/sanitized_pdf_trades.csv --report reports/privacy_guard_report.json
+python3 scripts/daily_session.py --trade-date YYYY-MM-DD --trades-csv reports/sanitized_pdf_trades.csv --journal private/journal.txt --market-view private/market_view.txt
+```
+
+If no table can be extracted, the PDF is probably scanned. Use local OCR first; do not upload raw PDF text to the coach.
+
 Manual lower-level commands:
 
 ```bash
