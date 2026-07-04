@@ -19,9 +19,9 @@ The main artifact is a coach-written Markdown note. Scripts support the coach by
 1. Build or update the evidence packet from sanitized trade facts and user context.
 2. Read `CONTEXT.md`, open position storylines, coach memory, personal trading modes, decision events, and the latest research-pool protocol.
 3. Write the daily coach note directly in Markdown using `templates/coach_note.md`.
-4. Update position storylines: identify whether each action continued a plan, corrected an error, increased risk, or showed emotional deformation.
-5. Update personal trading modes conservatively. A single profitable trade cannot become a reusable mode.
-6. Update coach memory with recurring execution errors, emotional triggers, and training focus.
+4. Draft position-storyline updates: identify whether each action continued a plan, corrected an error, increased risk, or showed emotional deformation.
+5. Draft personal-trading-mode updates conservatively. A single profitable trade cannot become a reusable mode.
+6. Draft coach-memory updates with recurring execution errors, emotional triggers, and training focus.
 7. Build tomorrow's research pool using `templates/research_pool.md`.
 8. Write a Xueqiu-ready review and tomorrow plan draft using `templates/xueqiu_post.md`.
 9. Render Markdown artifacts to HTML for reading.
@@ -149,7 +149,7 @@ This creates ignored files under `state/`:
 - `state/research_pool_protocol.md`
 - `state/decision_events.md`
 
-During coaching, read these files before judgment and update them after the coach note. Do not commit them.
+During coaching, read these files before judgment. After the coach note passes `finalize_session.py --strict`, generate state-update drafts and append only reviewed snippets. Do not commit them.
 
 ## Output Discipline
 
