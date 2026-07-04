@@ -78,4 +78,6 @@ Confirm no real trading data, no raw statement, no account identifier, and no ca
 - `scripts/research_pool_builder.py` builds a research-only candidate pool from local market/universe CSV; it must not label output as recommendations.
 - `scripts/finalize_session.py` validates local session notes and renders HTML; outputs remain under ignored `reports/`.
 - `scripts/append_state_update.py` appends reviewed Markdown snippets to ignored private state files only.
+- `scripts/draft_state_updates.py` extracts draft state snippets from a reviewed run; outputs remain under ignored `reports/`.
+- `scripts/account_report.py` generates local account fact reports from ignored ledger SQLite.
 - `scripts/init_state.py` creates private continuity files under `state/`; those files are ignored and must not be committed.

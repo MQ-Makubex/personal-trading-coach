@@ -101,6 +101,7 @@ python3 scripts/ledger_query.py recent --limit 20
 python3 scripts/ledger_query.py t-candidates
 python3 scripts/ledger_query.py cash-diff
 python3 scripts/ledger_query.py stock --stock-code 301421
+python3 scripts/account_report.py --html reports/account_report.html
 ```
 
 `cash-diff` is a cash-flow view, not realized PnL when positions remain open.
@@ -171,6 +172,7 @@ Warnings mean the coach note may still be too generic. Errors must be fixed befo
 After review, append approved state snippets with:
 
 ```bash
+python3 scripts/draft_state_updates.py reports/run_YYYYMMDD_HHMMSS --require-finalize-ok
 python3 scripts/append_state_update.py decision_events.md --update reports/run_YYYYMMDD_HHMMSS/state_update_decision_events.md --trade-date YYYY-MM-DD --source reports/run_YYYYMMDD_HHMMSS/coach_note.md
 ```
 

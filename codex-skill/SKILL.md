@@ -93,9 +93,11 @@ python3 scripts/ledger_import.py reports/pasted_trades_extracted.csv
 python3 scripts/ledger_query.py summary
 python3 scripts/ledger_query.py fee-drag
 python3 scripts/ledger_query.py t-candidates
+python3 scripts/account_report.py --html reports/account_report.html
 python3 scripts/build_evidence_packet.py --trades reports/pasted_trades_extracted.csv --trade-date YYYY-MM-DD --journal private/journal.txt --market-view private/market_view.txt -o reports/evidence_packet.md
 python3 scripts/pre_trade_guard.py --security "证券代码 证券名称" --action "拟执行动作" --trigger "触发条件" --invalidation "失效条件" --stop-anchor "止损锚点" --plan reports/run_*/trade_plan.md --html reports/pre_trade_guard.html
 python3 scripts/finalize_session.py reports/run_YYYYMMDD_HHMMSS --strict
+python3 scripts/draft_state_updates.py reports/run_YYYYMMDD_HHMMSS --require-finalize-ok
 python3 scripts/append_state_update.py decision_events.md --update reports/run_YYYYMMDD_HHMMSS/state_update_decision_events.md --trade-date YYYY-MM-DD --source reports/run_YYYYMMDD_HHMMSS/coach_note.md
 ```
 
