@@ -87,8 +87,23 @@ The ledger must not store identity information, account identifiers, fund balanc
 Recommended local commands:
 
 ```bash
+python3 scripts/daily_prepare.py --trade-date YYYY-MM-DD --pasted-trades-file private/raw_pasted_trades.txt --journal-file private/journal.txt --market-view-file private/market_view.txt --offline-market
 python3 scripts/daily_session.py --trade-date YYYY-MM-DD --pasted-trades private/raw_pasted_trades.txt --journal private/journal.txt --market-view private/market_view.txt
 ```
+
+Useful factual ledger queries:
+
+```bash
+python3 scripts/ledger_query.py summary
+python3 scripts/ledger_query.py fee-drag
+python3 scripts/ledger_query.py activity
+python3 scripts/ledger_query.py recent --limit 20
+python3 scripts/ledger_query.py t-candidates
+python3 scripts/ledger_query.py cash-diff
+python3 scripts/ledger_query.py stock --stock-code 301421
+```
+
+`cash-diff` is a cash-flow view, not realized PnL when positions remain open.
 
 For historical CSV/XLSX exports:
 

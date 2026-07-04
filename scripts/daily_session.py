@@ -42,6 +42,12 @@ def write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def safe_copy(source: Path, target: Path) -> None:
+    if source.resolve() == target.resolve():
+        return
+    shutil.copyfile(source, target)
+
+
 def count_csv_rows(path: Path) -> int:
     with path.open(newline="", encoding="utf-8") as handle:
         return sum(1 for _ in csv.DictReader(handle))
@@ -65,7 +71,7 @@ def render_to_html(markdown_path: Path, html_path: Path, title: str) -> None:
 def build_article_digest(args: argparse.Namespace, run_dir: Path, run_id: str) -> Path:
     if args.article_digest:
         output = run_dir / "article_digest.md"
-        shutil.copyfile(args.article_digest, output)
+        safe_copy(args.article_digest, output)
         return output
     template = (TEMPLATES_DIR / "article_digest.md").read_text(encoding="utf-8")
     article_urls = read_optional(args.article_urls)
@@ -193,10 +199,10 @@ def prepare_session(args: argparse.Namespace) -> Path:
     research_pool = None
     if args.market_snapshot:
         market_snapshot = run_dir / "market_snapshot.md"
-        shutil.copyfile(args.market_snapshot, market_snapshot)
+        safe_copy(args.market_snapshot, market_snapshot)
     if args.research_pool:
         research_pool = run_dir / "research_pool_candidates.md"
-        shutil.copyfile(args.research_pool, research_pool)
+        safe_copy(args.research_pool, research_pool)
 
     evidence_args = SimpleNamespace(
         trades=trades_csv,
