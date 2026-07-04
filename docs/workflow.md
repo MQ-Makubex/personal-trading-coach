@@ -76,6 +76,8 @@ Historical broker statements should be sanitized, parsed, deduplicated, and merg
 - total commission and fees by period;
 - trading frequency by day, week, month, and stock;
 - realized PnL by stock and period;
+- FIFO realized PnL by matched lots;
+- remaining position quantity and cost basis inferred from trade facts;
 - repeated loss patterns;
 - holding period distribution;
 - T-trade frequency and result;
@@ -100,11 +102,15 @@ python3 scripts/ledger_query.py activity
 python3 scripts/ledger_query.py recent --limit 20
 python3 scripts/ledger_query.py t-candidates
 python3 scripts/ledger_query.py cash-diff
+python3 scripts/ledger_query.py realized
+python3 scripts/ledger_query.py positions
+python3 scripts/ledger_query.py pnl-by-stock
 python3 scripts/ledger_query.py stock --stock-code 301421
 python3 scripts/account_report.py --html reports/account_report.html
 ```
 
 `cash-diff` is a cash-flow view, not realized PnL when positions remain open.
+`realized` and `pnl-by-stock` use FIFO matching: buy cost includes buy-side fees, and sell proceeds deduct sell-side fees. If historical data starts after a position was already opened, unmatched sells are flagged instead of being forced into false PnL.
 
 For historical CSV/XLSX exports:
 

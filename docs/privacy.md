@@ -70,6 +70,7 @@ Confirm no real trading data, no raw statement, no account identifier, and no ca
 - `scripts/privacy_guard.py` must run before trade facts enter the ledger.
 - `scripts/ledger_import.py` accepts only standard trade-fact CSV files that have passed privacy checks.
 - `scripts/ledger_query.py` answers factual ledger questions only.
+- `scripts/ledger_analytics.py` computes FIFO realized PnL, open position cost basis, and matched holding days from sanitized trade facts only.
 - `scripts/build_evidence_packet.py` creates coach-readable evidence; the coach still writes the judgment directly.
 - `scripts/daily_session.py` prepares one ignored run directory with evidence, prompts, drafts, and rendered placeholders.
 - `scripts/pre_trade_guard.py` creates plan-consistency and red-card questions for pre-trade or intraday use.

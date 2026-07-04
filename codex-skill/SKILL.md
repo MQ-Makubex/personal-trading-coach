@@ -93,6 +93,9 @@ python3 scripts/ledger_import.py reports/pasted_trades_extracted.csv
 python3 scripts/ledger_query.py summary
 python3 scripts/ledger_query.py fee-drag
 python3 scripts/ledger_query.py t-candidates
+python3 scripts/ledger_query.py realized
+python3 scripts/ledger_query.py positions
+python3 scripts/ledger_query.py pnl-by-stock
 python3 scripts/account_report.py --html reports/account_report.html
 python3 scripts/build_evidence_packet.py --trades reports/pasted_trades_extracted.csv --trade-date YYYY-MM-DD --journal private/journal.txt --market-view private/market_view.txt -o reports/evidence_packet.md
 python3 scripts/pre_trade_guard.py --security "证券代码 证券名称" --action "拟执行动作" --trigger "触发条件" --invalidation "失效条件" --stop-anchor "止损锚点" --plan reports/run_*/trade_plan.md --html reports/pre_trade_guard.html

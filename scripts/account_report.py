@@ -10,6 +10,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from ledger_analytics import fifo_analytics
 from render_markdown import build_html, render_markdown
 
 
@@ -29,7 +30,7 @@ def rows(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()) -> li
 
 
 def collect(conn: sqlite3.Connection, limit: int) -> dict[str, Any]:
-    return {
+    report = {
         "summary": rows(
             conn,
             """
@@ -138,6 +139,11 @@ def collect(conn: sqlite3.Connection, limit: int) -> dict[str, Any]:
             (limit,),
         ),
     }
+    analytics = fifo_analytics(conn)
+    report["realized_by_stock"] = analytics["realized_by_stock"][:limit]
+    report["open_positions"] = analytics["open_positions"][:limit]
+    report["realized_lots"] = analytics["realized_lots"][:limit]
+    return report
 
 
 def table(data: list[dict[str, Any]]) -> list[str]:
@@ -173,6 +179,22 @@ def markdown(report: dict[str, Any]) -> str:
         "`cash_difference_not_realized_pnl` 是现金流差额视图；如果仍有持仓，它不等于已实现盈亏。",
         "",
         *table(report["by_stock"]),
+        "",
+        "## FIFO 已实现盈亏",
+        "",
+        "已实现盈亏按先进先出估算，买入成本包含买入费用，卖出收入扣除卖出费用；若历史数据不完整，`unmatched_sell_quantity` 会提示存在无法匹配的卖出。",
+        "",
+        *table(report["realized_by_stock"]),
+        "",
+        "## 当前剩余仓位成本",
+        "",
+        "本节只来自历史成交推算，不读取资金余额或券商持仓截图。",
+        "",
+        *table(report["open_positions"]),
+        "",
+        "## 最近已闭合批次",
+        "",
+        *table(report["realized_lots"]),
         "",
         "## 日内同票买卖候选",
         "",

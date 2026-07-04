@@ -7,6 +7,8 @@ import argparse
 import sqlite3
 from pathlib import Path
 
+from ledger_analytics import fifo_analytics
+
 
 def connect(sqlite_path: Path) -> sqlite3.Connection:
     if not sqlite_path.exists():
@@ -16,7 +18,7 @@ def connect(sqlite_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def print_rows(rows: list[sqlite3.Row]) -> None:
+def print_rows(rows: list[sqlite3.Row] | list[dict[str, object]]) -> None:
     if not rows:
         print("无结果")
         return
@@ -219,6 +221,13 @@ def query_cash_diff_by_stock(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def analytics_rows(conn: sqlite3.Connection, key: str, limit: int | None = None) -> list[dict[str, object]]:
+    data = fifo_analytics(conn).get(key, [])
+    if limit is not None:
+        return data[:limit]
+    return data
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="查询本地历史交易底账。")
     parser.add_argument(
@@ -234,6 +243,9 @@ def main() -> int:
             "recent",
             "t-candidates",
             "cash-diff",
+            "realized",
+            "positions",
+            "pnl-by-stock",
         ],
     )
     parser.add_argument("--sqlite", type=Path, default=Path("state/account_ledger.sqlite"))
@@ -260,6 +272,15 @@ def main() -> int:
             rows = query_t_candidates(conn)
         elif args.query == "cash-diff":
             rows = query_cash_diff_by_stock(conn)
+        elif args.query == "realized":
+            print_rows(analytics_rows(conn, "realized_lots", args.limit))
+            return 0
+        elif args.query == "positions":
+            print_rows(analytics_rows(conn, "open_positions"))
+            return 0
+        elif args.query == "pnl-by-stock":
+            print_rows(analytics_rows(conn, "realized_by_stock"))
+            return 0
         else:
             rows = query_monthly(conn)
     print_rows(rows)
