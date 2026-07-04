@@ -45,6 +45,7 @@ When the user invokes `$personal-trading-coach` or asks for the trading coach, d
 - 明日研究股票池: produce a research pool, then ask the user to choose no more than 3 names for a plan.
 - 账户表现查询: answer factual ledger questions from sanitized local ledger data.
 - 历史导入: help sanitize and initialize historical trade facts.
+- 截图备用识别: only when the user explicitly uploads a screenshot to Codex; extract standard trade facts, do not store the raw image in the repository.
 
 ## Coaching Rules
 

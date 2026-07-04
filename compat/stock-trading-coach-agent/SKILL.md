@@ -44,6 +44,7 @@ Use the new mode selection:
 - 明日研究股票池: build a research-only pool, then let the user select no more than 3 names for conditional plans.
 - 账户查询: answer factual ledger questions from sanitized local data.
 - 历史导入: normalize, privacy-check, deduplicate, and import trade facts into the local ledger.
+- 截图备用识别: only when the user explicitly uploads a screenshot to Codex; extract standard trade facts and do not store the raw image in the repository.
 
 ## Core Boundary
 

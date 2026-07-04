@@ -9,6 +9,7 @@ The main artifact is a coach-written Markdown note. Scripts support the coach by
 ## Daily Inputs
 
 - 今日成交事实: pasted broker table, sanitized statement, or manually entered trades.
+- 成交截图: fallback only. If the user explicitly uploads a screenshot to Codex, extract only standard trade facts into an ignored local text/CSV file; do not store the image in the repository.
 - 今日交易想法: plan, emotions, mistakes, hesitation, market read, and pain points.
 - 待校正市场判断: user observations about indices, sectors, themes, style, and sentiment.
 - 当前持仓: position status and unresolved storylines.
