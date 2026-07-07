@@ -42,6 +42,15 @@ def run_command(args: list[str]) -> None:
     subprocess.run([sys.executable, *args], cwd=ROOT, check=True)
 
 
+def run_optional_command(args: list[str]) -> bool:
+    try:
+        run_command(args)
+        return True
+    except subprocess.CalledProcessError as exc:
+        print(f"warning: optional command failed, continuing without it: {exc}", file=sys.stderr)
+        return False
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="一条命令准备每日交易教练 run 包。")
     parser.add_argument("--trade-date", default=date.today().isoformat())
@@ -170,10 +179,27 @@ def main() -> int:
 
     if not args.skip_research_pool and args.candidate_universe:
         research_pool = run_dir / "research_pool_candidates.md"
+        enriched_universe = run_dir / "enriched_candidate_universe.csv"
+        source_universe = args.candidate_universe
+        if run_optional_command(
+            [
+                str(SCRIPTS / "enhance_candidate_universe.py"),
+                str(args.candidate_universe),
+                "--trade-date",
+                args.trade_date,
+                "--provider",
+                "auto",
+                "--output",
+                str(enriched_universe),
+                "--json",
+                str(run_dir / "enriched_candidate_universe.json"),
+            ]
+        ):
+            source_universe = enriched_universe
         run_command(
             [
                 str(SCRIPTS / "research_pool_builder.py"),
-                str(args.candidate_universe),
+                str(source_universe),
                 "--trade-date",
                 args.trade_date,
                 "--csv",

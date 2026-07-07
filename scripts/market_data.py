@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+"""Optional AKShare/BaoStock market data adapters for local coach scripts."""
+
+from __future__ import annotations
+
+import importlib
+import math
+from dataclasses import dataclass
+from datetime import date, datetime
+from typing import Any
+
+
+MA_WINDOWS = (5, 10, 20, 50, 200)
+
+
+@dataclass
+class DailyBar:
+    trade_date: str
+    open: float | None
+    high: float | None
+    low: float | None
+    close: float | None
+    volume: float | None
+    amount: float | None
+    turnover: float | None = None
+    pct_chg: float | None = None
+
+
+@dataclass
+class DailySeries:
+    code: str
+    provider: str
+    bars: list[DailyBar]
+    source: str
+    notes: list[str]
+
+
+def to_float(value: Any) -> float | None:
+    try:
+        if value in (None, "", "-", "--", "nan"):
+            return None
+        number = float(str(value).replace(",", ""))
+        if math.isnan(number):
+            return None
+        return number
+    except (TypeError, ValueError):
+        return None
+
+
+def normalize_date(value: str | date | None, *, compact: bool = False) -> str:
+    if value is None:
+        parsed = date.today()
+    elif isinstance(value, date):
+        parsed = value
+    else:
+        text = str(value).strip()
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y%m%d"):
+            try:
+                parsed = datetime.strptime(text, fmt).date()
+                break
+            except ValueError:
+                continue
+        else:
+            raise ValueError(f"unsupported date format: {value}")
+    return parsed.strftime("%Y%m%d" if compact else "%Y-%m-%d")
+
+
+def normalize_stock_code(code: str) -> str:
+    digits = "".join(ch for ch in str(code).strip() if ch.isdigit())
+    return digits.zfill(6) if digits else ""
+
+
+def baostock_code(code: str) -> str:
+    digits = normalize_stock_code(code)
+    if digits.startswith(("5", "6", "9")):
+        return f"sh.{digits}"
+    return f"sz.{digits}"
+
+
+def fetch_daily_bars_akshare(code: str, start_date: str, end_date: str, adjust: str) -> DailySeries:
+    akshare = importlib.import_module("akshare")
+    symbol = normalize_stock_code(code)
+    adjust_value = "" if adjust == "none" else adjust
+    frame = akshare.stock_zh_a_hist(
+        symbol=symbol,
+        period="daily",
+        start_date=normalize_date(start_date, compact=True),
+        end_date=normalize_date(end_date, compact=True),
+        adjust=adjust_value,
+    )
+    bars: list[DailyBar] = []
+    for _, row in frame.iterrows():
+        bars.append(
+            DailyBar(
+                trade_date=normalize_date(row.get("日期")),
+                open=to_float(row.get("开盘")),
+                high=to_float(row.get("最高")),
+                low=to_float(row.get("最低")),
+                close=to_float(row.get("收盘")),
+                volume=to_float(row.get("成交量")),
+                amount=to_float(row.get("成交额")),
+                turnover=to_float(row.get("换手率")),
+                pct_chg=to_float(row.get("涨跌幅")),
+            )
+        )
+    bars.sort(key=lambda item: item.trade_date)
+    return DailySeries(code=symbol, provider="akshare", bars=bars, source="akshare.stock_zh_a_hist", notes=[])
+
+
+def baostock_adjust_flag(adjust: str) -> str:
+    mapping = {
+        "": "3",
+        "none": "3",
+        "qfq": "2",
+        "hfq": "1",
+    }
+    return mapping.get(adjust, "2")
+
+
+def fetch_daily_bars_baostock(code: str, start_date: str, end_date: str, adjust: str) -> DailySeries:
+    baostock = importlib.import_module("baostock")
+    lg = baostock.login()
+    if getattr(lg, "error_code", "0") != "0":
+        raise RuntimeError(f"baostock login failed: {getattr(lg, 'error_msg', '')}")
+    try:
+        fields = "date,code,open,high,low,close,preclose,volume,amount,turn,pctChg"
+        result = baostock.query_history_k_data_plus(
+            baostock_code(code),
+            fields,
+            start_date=normalize_date(start_date),
+            end_date=normalize_date(end_date),
+            frequency="d",
+            adjustflag=baostock_adjust_flag(adjust),
+        )
+        if getattr(result, "error_code", "0") != "0":
+            raise RuntimeError(f"baostock query failed: {getattr(result, 'error_msg', '')}")
+        bars: list[DailyBar] = []
+        while result.next():
+            row = dict(zip(result.fields, result.get_row_data()))
+            bars.append(
+                DailyBar(
+                    trade_date=normalize_date(row.get("date")),
+                    open=to_float(row.get("open")),
+                    high=to_float(row.get("high")),
+                    low=to_float(row.get("low")),
+                    close=to_float(row.get("close")),
+                    volume=to_float(row.get("volume")),
+                    amount=to_float(row.get("amount")),
+                    turnover=to_float(row.get("turn")),
+                    pct_chg=to_float(row.get("pctChg")),
+                )
+            )
+        bars.sort(key=lambda item: item.trade_date)
+        return DailySeries(
+            code=normalize_stock_code(code),
+            provider="baostock",
+            bars=bars,
+            source="baostock.query_history_k_data_plus",
+            notes=[],
+        )
+    finally:
+        baostock.logout()
+
+
+def fetch_daily_bars(
+    code: str,
+    start_date: str,
+    end_date: str,
+    *,
+    provider: str = "auto",
+    adjust: str = "qfq",
+) -> DailySeries:
+    providers = ["akshare", "baostock"] if provider == "auto" else [provider]
+    errors: list[str] = []
+    for item in providers:
+        try:
+            if item == "akshare":
+                series = fetch_daily_bars_akshare(code, start_date, end_date, adjust)
+            elif item == "baostock":
+                series = fetch_daily_bars_baostock(code, start_date, end_date, adjust)
+            else:
+                raise ValueError(f"unknown provider: {item}")
+            if series.bars:
+                if errors:
+                    series.notes.extend(errors)
+                return series
+            errors.append(f"{item}: empty daily series")
+        except Exception as exc:  # noqa: BLE001 - caller needs degraded source notes.
+            errors.append(f"{item}: {exc.__class__.__name__}: {exc}")
+    raise RuntimeError("; ".join(errors) if errors else "no provider attempted")
+
+
+def moving_average(values: list[float], window: int) -> float | None:
+    if len(values) < window:
+        return None
+    subset = values[-window:]
+    return round(sum(subset) / window, 4)
+
+
+def relation_pct(close: float | None, anchor: float | None) -> float | None:
+    if close is None or not anchor:
+        return None
+    return round((close - anchor) / anchor * 100, 2)
+
+
+def ma_state(rel: float | None) -> str:
+    if rel is None:
+        return "无法判断"
+    if -1.5 <= rel <= 2.5:
+        return "贴近"
+    if rel > 8:
+        return "远离上方"
+    if rel > 2.5:
+        return "上方"
+    if rel < -5:
+        return "跌破较远"
+    return "下方"
+
+
+def ma_first_hand_score(close: float | None, metrics: dict[str, float | None]) -> tuple[int, list[str], list[str]]:
+    score = 0
+    reasons: list[str] = []
+    risks: list[str] = []
+    if close is None:
+        return 0, [], ["缺少收盘价，无法判断均线先手。"]
+
+    rels = {window: relation_pct(close, metrics.get(f"ma{window}")) for window in MA_WINDOWS}
+    if any(rels[window] is not None and -1.5 <= rels[window] <= 2.5 for window in (5, 10)):
+        score += 12
+        reasons.append("贴近 5/10 日线，具备短线回踩观察价值。")
+    if rels.get(20) is not None and -2 <= rels[20] <= 3:
+        score += 10
+        reasons.append("贴近 20 日线，可作为中短线纪律锚点。")
+    if rels.get(50) is not None and -2 <= rels[50] <= 5:
+        score += 8
+        reasons.append("贴近 50 日线，趋势修复边界较清楚。")
+    if rels.get(200) is not None and -2 <= rels[200] <= 6:
+        score += 12
+        reasons.append("贴近 200 日线，适合验证长期均线修复。")
+    if all(rels.get(window) is not None and rels[window] >= 0 for window in (5, 10, 20)):
+        score += 8
+        reasons.append("收盘位于 5/10/20 日线之上，短线结构较完整。")
+
+    for window in (5, 10):
+        rel = rels.get(window)
+        if rel is not None and rel > 8:
+            risks.append(f"高于 {window} 日线 {rel:.2f}%，先手性下降，追高风险上升。")
+    for window in (20, 50, 200):
+        rel = rels.get(window)
+        if rel is not None and rel < -3:
+            risks.append(f"低于 {window} 日线 {abs(rel):.2f}%，需要先证明不是破位。")
+    return score, reasons, risks
+
+
+def summarize_daily_series(series: DailySeries) -> dict[str, Any]:
+    bars = [bar for bar in series.bars if bar.close is not None]
+    latest = bars[-1] if bars else None
+    closes = [bar.close for bar in bars if bar.close is not None]
+    volumes = [bar.volume for bar in bars if bar.volume is not None]
+    metrics: dict[str, Any] = {
+        "stock_code": series.code,
+        "data_provider": series.provider,
+        "data_source": series.source,
+        "bar_count": len(series.bars),
+        "latest_trade_date": latest.trade_date if latest else "",
+        "close": latest.close if latest else None,
+        "volume": latest.volume if latest else None,
+        "amount": latest.amount if latest else None,
+        "turnover": latest.turnover if latest else None,
+        "change_pct": latest.pct_chg if latest else None,
+        "data_notes": "；".join(series.notes),
+    }
+    if latest and latest.pct_chg is None and len(bars) >= 2 and bars[-2].close:
+        metrics["change_pct"] = round((latest.close - bars[-2].close) / bars[-2].close * 100, 2)
+    if len(volumes) >= 20:
+        metrics["avg_volume20"] = round(sum(volumes[-20:]) / 20, 2)
+    else:
+        metrics["avg_volume20"] = None
+    for window in MA_WINDOWS:
+        metrics[f"ma{window}"] = moving_average(closes, window)
+        metrics[f"ma{window}_relation_pct"] = relation_pct(metrics.get("close"), metrics.get(f"ma{window}"))
+        metrics[f"ma{window}_state"] = ma_state(metrics.get(f"ma{window}_relation_pct"))
+    score, reasons, risks = ma_first_hand_score(metrics.get("close"), metrics)
+    metrics["ma_first_hand_score"] = score
+    metrics["ma_first_hand_reasons"] = "；".join(reasons)
+    metrics["ma_first_hand_risks"] = "；".join(risks)
+    metrics["ma_summary"] = "；".join(
+        f"{window}日:{metrics.get(f'ma{window}_state')}" for window in MA_WINDOWS
+    )
+    return metrics

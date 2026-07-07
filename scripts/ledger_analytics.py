@@ -99,13 +99,30 @@ def load_trades(conn: sqlite3.Connection) -> list[Trade]:
     return trades
 
 
-def fifo_analytics(conn: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
-    lots_by_stock: dict[tuple[str, str], deque[Lot]] = defaultdict(deque)
-    realized_rows: list[dict[str, Any]] = []
-    unmatched: dict[tuple[str, str], float] = defaultdict(float)
+def display_names_by_code(trades: list[Trade]) -> dict[str, str]:
+    names: dict[str, str] = {}
+    fallback: dict[str, str] = {}
+    for trade in trades:
+        code = trade.stock_code
+        name = trade.stock_name
+        if not code:
+            continue
+        if name:
+            fallback[code] = name[2:] if name.startswith("XD") else name
+        if name and not name.startswith("XD"):
+            names[code] = name
+    return {code: names.get(code) or fallback.get(code, "") for code in fallback}
 
-    for trade in load_trades(conn):
-        key = (trade.stock_code, trade.stock_name)
+
+def fifo_analytics(conn: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
+    trades = load_trades(conn)
+    display_names = display_names_by_code(trades)
+    lots_by_stock: dict[str, deque[Lot]] = defaultdict(deque)
+    realized_rows: list[dict[str, Any]] = []
+    unmatched: dict[str, float] = defaultdict(float)
+
+    for trade in trades:
+        key = trade.stock_code
         if trade.quantity <= 0:
             continue
 
@@ -125,7 +142,7 @@ def fifo_analytics(conn: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
             realized_rows.append(
                 {
                     "stock_code": trade.stock_code,
-                    "stock_name": trade.stock_name,
+                    "stock_name": display_names.get(trade.stock_code, trade.stock_name),
                     "buy_date": lot.trade_date,
                     "sell_date": trade.trade_date,
                     "sell_time": trade.trade_time,
@@ -145,7 +162,7 @@ def fifo_analytics(conn: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
             unmatched[key] += sell_qty
 
     open_positions: list[dict[str, Any]] = []
-    for (stock_code, stock_name), lots in lots_by_stock.items():
+    for stock_code, lots in lots_by_stock.items():
         quantity = sum(lot.quantity for lot in lots)
         cost_basis = sum(lot.quantity * lot.unit_cost for lot in lots)
         if quantity <= 1e-9:
@@ -154,7 +171,7 @@ def fifo_analytics(conn: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
         open_positions.append(
             {
                 "stock_code": stock_code,
-                "stock_name": stock_name,
+                "stock_name": display_names.get(stock_code, ""),
                 "open_quantity": money(quantity),
                 "open_cost_basis_after_fees": money(cost_basis),
                 "average_cost_after_fees": money(cost_basis / quantity) if quantity else None,
@@ -163,14 +180,14 @@ def fifo_analytics(conn: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
             }
         )
 
-    by_stock: dict[tuple[str, str], dict[str, Any]] = {}
+    by_stock: dict[str, dict[str, Any]] = {}
     for row in realized_rows:
-        key = (row["stock_code"], row["stock_name"])
+        key = str(row["stock_code"])
         item = by_stock.setdefault(
             key,
             {
                 "stock_code": row["stock_code"],
-                "stock_name": row["stock_name"],
+                "stock_name": display_names.get(str(row["stock_code"]), str(row["stock_name"])),
                 "closed_quantity": 0.0,
                 "cost_basis": 0.0,
                 "sell_proceeds_after_fees": 0.0,
@@ -201,12 +218,12 @@ def fifo_analytics(conn: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
             item["holding_day_weight"] += qty
 
     for row in open_positions:
-        key = (row["stock_code"], row["stock_name"])
+        key = str(row["stock_code"])
         item = by_stock.setdefault(
             key,
             {
                 "stock_code": row["stock_code"],
-                "stock_name": row["stock_name"],
+                "stock_name": display_names.get(str(row["stock_code"]), str(row["stock_name"])),
                 "closed_quantity": 0.0,
                 "cost_basis": 0.0,
                 "sell_proceeds_after_fees": 0.0,
@@ -224,12 +241,12 @@ def fifo_analytics(conn: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
         item["open_quantity"] += number(row["open_quantity"])
         item["open_cost_basis_after_fees"] += number(row["open_cost_basis_after_fees"])
 
-    for (stock_code, stock_name), qty in unmatched.items():
+    for stock_code, qty in unmatched.items():
         item = by_stock.setdefault(
-            (stock_code, stock_name),
+            stock_code,
             {
                 "stock_code": stock_code,
-                "stock_name": stock_name,
+                "stock_name": display_names.get(stock_code, ""),
                 "closed_quantity": 0.0,
                 "cost_basis": 0.0,
                 "sell_proceeds_after_fees": 0.0,

@@ -77,6 +77,8 @@ Confirm no real trading data, no raw statement, no account identifier, and no ca
 - `scripts/pre_trade_guard.py` creates plan-consistency and red-card questions for pre-trade or intraday use.
 - `scripts/article_digest.py` stores article URL/title/summary and narrative-pollution checks, not full article text.
 - `scripts/market_snapshot.py` collects public market facts or explicit offline placeholders; it must not store private account data.
+- `scripts/market_data.py` reads public daily A-share bars through optional AKShare/BaoStock adapters only.
+- `scripts/enhance_candidate_universe.py` enriches a private candidate CSV with public price, volume, MA, and MA-position fields; generated outputs remain ignored under `reports/`.
 - `scripts/research_pool_builder.py` builds a research-only candidate pool from local market/universe CSV; it must not label output as recommendations.
 - `scripts/finalize_session.py` validates local session notes and renders HTML; outputs remain under ignored `reports/`.
 - `scripts/append_state_update.py` appends reviewed Markdown snippets to ignored private state files only.
