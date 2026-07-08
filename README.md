@@ -229,11 +229,24 @@ python3 scripts/account_report.py --html reports/account_report.html
 
 研究池不是推荐名单，只是训练用候选面。
 
+先用 AKShare/BaoStock 给候选池补齐日线、均线和均线先手分：
+
 ```bash
-python3 scripts/research_pool_builder.py private/candidate_universe.csv \
+python3 scripts/enhance_candidate_universe.py private/candidate_universe.csv \
+  --trade-date YYYY-MM-DD \
+  --provider auto \
+  --output reports/enriched_candidate_universe.csv
+```
+
+再基于增强后的候选池生成研究池：
+
+```bash
+python3 scripts/research_pool_builder.py reports/enriched_candidate_universe.csv \
   --trade-date YYYY-MM-DD \
   --md reports/research_pool_candidates.md
 ```
+
+默认剔除 `688` 科创板股票。`688` 只能作为板块温度计观察，不能进入当前账户的候选池。
 
 用户最多从研究池中选 3 支进入明日交易预案。没有触发条件、失效条件、止损锚点和仓位上限，不能从研究池升级为交易预案。
 

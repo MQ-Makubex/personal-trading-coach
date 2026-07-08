@@ -19,6 +19,8 @@ OUTPUT_FIELDS = [
     "score",
     "status",
     "mode_fit",
+    "ma_summary",
+    "ma_first_hand_score",
     "reasons",
     "risks",
     "trigger_questions",
@@ -66,11 +68,14 @@ def score_row(row: dict[str, str]) -> ScoreResult:
     ma200 = to_float(row.get("ma200"))
     ma5 = to_float(row.get("ma5"))
     ma10 = to_float(row.get("ma10"))
+    ma20 = to_float(row.get("ma20"))
+    ma50 = to_float(row.get("ma50"))
     volume = to_float(row.get("volume"))
     avg_volume20 = to_float(row.get("avg_volume20"))
     change_pct = to_float(row.get("change_pct"))
     theme_strength = to_float(row.get("theme_strength"))
     amount = to_float(row.get("amount"))
+    ma_first_hand = to_float(row.get("ma_first_hand_score"))
 
     theme = row.get("theme", "").strip()
     notes = row.get("notes", "").strip()
@@ -99,6 +104,28 @@ def score_row(row: dict[str, str]) -> ScoreResult:
         risks.append(f"价格低于 200 日线 {ma200_rel:.2f}%，不符合上穿/回踩 200 日线模式。")
     else:
         risks.append(f"价格远离 200 日线 {ma200_rel:.2f}%，不适合作为低风险买点训练。")
+
+    if ma_first_hand is not None:
+        add = max(0, min(24, int(ma_first_hand)))
+        score += add
+        if add:
+            reasons.append(f"均线先手分 {add}/24。")
+    else:
+        ma20_rel = relation(close, ma20)
+        ma50_rel = relation(close, ma50)
+        if ma20_rel is not None and -2 <= ma20_rel <= 3:
+            score += 10
+            reasons.append(f"价格距 20 日线 {ma20_rel:.2f}%，接近中短线纪律锚点。")
+        if ma50_rel is not None and -2 <= ma50_rel <= 5:
+            score += 8
+            reasons.append(f"价格距 50 日线 {ma50_rel:.2f}%，趋势修复边界较清楚。")
+        if ma20_rel is None or ma50_rel is None:
+            risks.append("缺少 ma20/ma50，无法完整验证 5/10/20/50/200 均线结构。")
+
+    if row.get("ma_first_hand_reasons"):
+        reasons.append(row["ma_first_hand_reasons"])
+    if row.get("ma_first_hand_risks"):
+        risks.append(row["ma_first_hand_risks"])
 
     if volume is not None and avg_volume20:
         volume_ratio = volume / avg_volume20
@@ -133,6 +160,12 @@ def score_row(row: dict[str, str]) -> ScoreResult:
         risks.append("收盘低于 5 日线，短线强度不足。")
     if close is not None and ma10 is not None and close < ma10:
         risks.append("收盘低于 10 日线，止损/失效锚点需更严格。")
+    ma5_rel = relation(close, ma5)
+    ma10_rel = relation(close, ma10)
+    if ma5_rel is not None and ma5_rel > 8:
+        risks.append(f"价格高于 5 日线 {ma5_rel:.2f}%，不再是均线先手买点。")
+    if ma10_rel is not None and ma10_rel > 10:
+        risks.append(f"价格高于 10 日线 {ma10_rel:.2f}%，追一致风险上升。")
 
     if any(token in notes for token in ("红牌", "退潮", "破位", "无计划")):
         score -= 30
@@ -152,9 +185,16 @@ def score_row(row: dict[str, str]) -> ScoreResult:
     return ScoreResult(score=max(0, score), mode_fit=mode_fit, reasons=reasons, risks=risks, trigger_questions=trigger_questions, status=status)
 
 
-def build_pool(rows: list[dict[str, str]], limit: int) -> list[dict[str, str]]:
+def excluded_by_prefix(row: dict[str, str], prefixes: list[str]) -> bool:
+    code = (row.get("stock_code") or row.get("code") or "").strip()
+    return any(code.startswith(prefix) for prefix in prefixes)
+
+
+def build_pool(rows: list[dict[str, str]], limit: int, exclude_prefixes: list[str]) -> list[dict[str, str]]:
     output = []
     for row in rows:
+        if excluded_by_prefix(row, exclude_prefixes):
+            continue
         result = score_row(row)
         output.append(
             {
@@ -164,6 +204,8 @@ def build_pool(rows: list[dict[str, str]], limit: int) -> list[dict[str, str]]:
                 "score": str(result.score),
                 "status": result.status,
                 "mode_fit": result.mode_fit,
+                "ma_summary": row.get("ma_summary", ""),
+                "ma_first_hand_score": row.get("ma_first_hand_score", ""),
                 "reasons": "；".join(result.reasons),
                 "risks": "；".join(result.risks),
                 "trigger_questions": "；".join(result.trigger_questions),
@@ -202,7 +244,7 @@ def markdown(rows: list[dict[str, str]], trade_date: str) -> str:
                     row.get("score", ""),
                     row.get("status", ""),
                     row.get("mode_fit", ""),
-                    row.get("reasons", ""),
+                    f"{row.get('ma_summary', '')}；{row.get('reasons', '')}".strip("；"),
                     row.get("risks", ""),
                     row.get("trigger_questions", ""),
                 ]
@@ -216,6 +258,7 @@ def markdown(rows: list[dict[str, str]], trade_date: str) -> str:
             "",
             "- 用户最多选择 3 支进入明日交易预案。",
             "- 没有明确触发条件、失效条件、止损锚点和仓位上限，不能从研究池升级为预案。",
+            "- 默认剔除 688 科创板股票；如需观察，只能作为板块温度计，不进入候选池。",
             "- 研究池结果需要次日复盘验证，并反馈到 `state/research_pool_protocol.md`。",
         ]
     )
@@ -227,12 +270,15 @@ def main() -> int:
     parser.add_argument("universe_csv", type=Path)
     parser.add_argument("--trade-date", default=date.today().isoformat())
     parser.add_argument("--limit", type=int, default=15)
+    parser.add_argument("--exclude-prefix", action="append", default=["688"], help="默认剔除无法交易的代码前缀，可重复传入。")
+    parser.add_argument("--include-688", action="store_true", help="允许 688 进入研究池，仅在账户可交易时使用。")
     parser.add_argument("--csv", type=Path, default=Path("reports/research_pool_candidates.csv"))
     parser.add_argument("--json", type=Path, default=Path("reports/research_pool_candidates.json"))
     parser.add_argument("--md", type=Path, default=Path("reports/research_pool_candidates.md"))
     args = parser.parse_args()
 
-    rows = build_pool(read_rows(args.universe_csv), args.limit)
+    exclude_prefixes = [] if args.include_688 else args.exclude_prefix
+    rows = build_pool(read_rows(args.universe_csv), args.limit, exclude_prefixes)
     write_csv(rows, args.csv)
     args.json.parent.mkdir(parents=True, exist_ok=True)
     args.md.parent.mkdir(parents=True, exist_ok=True)
