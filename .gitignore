@@ -28,6 +28,7 @@ local_state/**
 __pycache__/
 *.py[cod]
 .DS_Store
+.superpowers/
 
 # Keep private directory placeholders
 !state/.gitkeep
