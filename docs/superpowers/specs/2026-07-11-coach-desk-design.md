@@ -1,7 +1,7 @@
 # 个人交易教练台与模式档案设计
 
 - 日期：2026-07-11
-- 状态：已确认，待实施计划
+- 状态：已确认，待实施
 - 范围：首页教练台、交易底账时间筛选、股票周期故事、交易模式档案、纪律消息存储
 
 ## 1. 目标
@@ -98,6 +98,8 @@
 - `可进入验证`：某个交易前已定义的模式条件完整，可形成验证样本；不代表必须交易。
 
 首页左侧突出全局闸门的状态、原因和下一项必须核验的事实。右侧显示当前交易正在验证的模式摘要。
+
+闸门状态与模式资格必须来自 `state/trading_modes.json` 的结构化字段，不能从教练手记自由文本自动猜测。文件缺失或尚未填写时统一显示 `待核验`。
 
 ### 4.3 今日工作区
 
@@ -307,6 +309,14 @@
 ```json
 {
   "version": 1,
+  "coach_gate": {
+    "status": "pending",
+    "target_date": null,
+    "reasons": [],
+    "next_check": "",
+    "source_path": ""
+  },
+  "mode_eligibility": [],
   "modes": [
     {
       "id": "risk-anchor-close",
@@ -333,6 +343,15 @@
   ]
 }
 ```
+
+`coach_gate.status` 和 `mode_eligibility[].status` 只允许：
+
+- `pending`：待核验
+- `locked`：风险锁定
+- `observe`：仅观察
+- `eligible`：可进入验证
+
+`mode_eligibility` 每项包含 `mode_id`、`status`、`target_date`、`reasons` 和项目内相对 `source_path`。本轮不自动生成闸门或资格判断；状态由后续教练流程或人工审核写入。
 
 派生数量如正式样本数、支持样本数和平均结果不重复存储，由生成器计算。
 
@@ -368,10 +387,11 @@
 1. `state/account_ledger.sqlite` 继续只保存交易事实。
 2. 站点生成器从底账计算账户事实、交易周期、区间统计和股票故事。
 3. `state/trading_modes.json` 通过稳定周期 ID 关联计算出的周期。
-4. `state/discipline_feed.json` 提供首页纪律消息。
-5. Markdown 手记、预案、股票池和状态文件继续作为教练叙事与证据来源。
-6. 现有 `state/personal_trading_modes.md` 不删除、不自动迁移；经过人工审核的结构化模式才写入 JSON。
-7. 生成后的 `reports/personal_site/site_data.json` 只包含页面所需字段，并继续处于 Git 忽略范围。
+4. 同一文件提供经过人工写入的全局教练闸门和逐模式资格；生成器不从 Markdown 反推状态。
+5. `state/discipline_feed.json` 提供首页纪律消息。
+6. Markdown 手记、预案、股票池和状态文件继续作为教练叙事与证据来源。
+7. 现有 `state/personal_trading_modes.md` 不删除、不自动迁移；经过人工审核的结构化模式才写入 JSON。
+8. 生成后的 `reports/personal_site/site_data.json` 只包含页面所需字段，并继续处于 Git 忽略范围。
 
 ## 11. 页面状态与错误处理
 
@@ -382,6 +402,7 @@
 - 无生效纪律消息：显示“暂无已发布纪律消息”。
 - 无正式模式样本：显示 `0 / 3`，历史参考单独计数。
 - JSON 文件缺失：按空版本处理并显示空状态。
+- 闸门或模式资格尚未填写：显示 `待核验`，不从手记正文自动补值。
 - JSON 结构错误：页面继续生成其他区域，并在对应模块显示“状态数据待修复”。
 - 筛选无匹配：保留筛选控件，区间统计显示 0，表格显示空状态。
 
