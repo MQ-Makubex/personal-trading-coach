@@ -237,7 +237,7 @@ def future_same_day_buys(trades: list[Trade]) -> set[int]:
         key = (trade.stock_code, trade.trade_date)
         if trade.side == "SELL" and key in future_buy_keys:
             rows_with_future_buy.add(trade.rowid)
-        elif trade.side == "BUY":
+        elif trade.side == "BUY" and trade.quantity > 0:
             future_buy_keys.add(key)
     return rows_with_future_buy
 

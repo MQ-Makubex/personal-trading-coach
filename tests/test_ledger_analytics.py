@@ -32,13 +32,15 @@ def trade(
     fees: float = 0.0,
     net_amount: float = 0.0,
     price: float | None = None,
+    stock_code: str = "000001",
+    stock_name: str = "TEST",
 ) -> Trade:
     return Trade(
         rowid=rowid,
         trade_date=trade_date,
         trade_time=trade_time,
-        stock_code="000001",
-        stock_name="TEST",
+        stock_code=stock_code,
+        stock_name=stock_name,
         side=side,
         quantity=quantity,
         amount=amount,
@@ -144,6 +146,174 @@ class RollingCostPositionsTest(unittest.TestCase):
 
 
 class BrokerLikeCyclesTest(unittest.TestCase):
+    def test_zero_quantity_buy_does_not_defer_same_day_close(self) -> None:
+        trades = [
+            trade(1, "2026-01-01", "09:30:00", "BUY", 100, 1000),
+            trade(2, "2026-01-02", "10:00:00", "SELL", 100, 1200),
+            trade(3, "2026-01-02", "14:00:00", "BUY", 0, 0),
+        ]
+
+        cycles = broker_like_cycles(trades, {"000001": "TEST"})
+
+        self.assertEqual(len(cycles), 1)
+        self.assertEqual(cycles[0]["status"], "closed")
+        self.assertEqual(cycles[0]["close_date"], "2026-01-02")
+        self.assertEqual([event["rowid"] for event in cycles[0]["events"]], [1, 2])
+
+    def test_cycle_schema_events_and_order_are_canonical(self) -> None:
+        trades = [
+            trade(6, "2026-01-02", "09:00:00", "BUY", 100, 1200, stock_code="000003"),
+            trade(
+                3,
+                "2026-01-02",
+                "10:00:00",
+                "SELL",
+                100,
+                1200,
+                fees=2,
+                net_amount=1198,
+                stock_code="000001",
+            ),
+            trade(
+                2,
+                "2026-01-01",
+                "09:30:00",
+                "BUY",
+                60,
+                660,
+                fees=1,
+                net_amount=-661,
+                stock_code="000001",
+            ),
+            trade(5, "2026-01-01", "09:30:00", "BUY", 100, 1000, stock_code="000002"),
+            trade(
+                1,
+                "2026-01-01",
+                "09:30:00",
+                "BUY",
+                40,
+                400,
+                fees=1,
+                net_amount=-401,
+                stock_code="000001",
+            ),
+        ]
+
+        cycles = broker_like_cycles(
+            trades,
+            {"000001": "ONE", "000002": "TWO", "000003": "THREE"},
+        )
+
+        cycle_keys = {
+            "cycle_id",
+            "status",
+            "stock_code",
+            "stock_name",
+            "first_buy_date",
+            "first_buy_time",
+            "last_buy_date",
+            "last_buy_time",
+            "close_date",
+            "close_time",
+            "holding_days",
+            "buy_quantity",
+            "sell_quantity",
+            "open_quantity",
+            "buy_cost_after_fees",
+            "sell_proceeds_after_fees",
+            "rolling_cost_basis_after_fees",
+            "realized_pnl_after_fees",
+            "return_pct",
+            "position_quantity_before_close",
+            "close_trade_quantity",
+            "close_cost_basis_before_sell",
+            "close_average_cost_before_sell",
+            "close_sell_proceeds_after_fees",
+            "events",
+        }
+        event_keys = {
+            "rowid",
+            "trade_date",
+            "trade_time",
+            "side",
+            "quantity",
+            "price",
+            "amount",
+            "net_amount",
+            "fees",
+        }
+
+        self.assertEqual(
+            [(row["first_buy_date"], row["first_buy_time"], row["stock_code"]) for row in cycles],
+            [
+                ("2026-01-01", "09:30:00", "000001"),
+                ("2026-01-01", "09:30:00", "000002"),
+                ("2026-01-02", "09:00:00", "000003"),
+            ],
+        )
+        for cycle in cycles:
+            self.assertEqual(set(cycle), cycle_keys)
+            for event in cycle["events"]:
+                self.assertEqual(set(event), event_keys)
+        self.assertEqual([event["rowid"] for event in cycles[0]["events"]], [1, 2, 3])
+        self.assertEqual(
+            cycles[0]["events"][0],
+            {
+                "rowid": 1,
+                "trade_date": "2026-01-01",
+                "trade_time": "09:30:00",
+                "side": "BUY",
+                "quantity": 40,
+                "price": 10.0,
+                "amount": 400,
+                "net_amount": -401,
+                "fees": 1,
+            },
+        )
+
+    def test_realized_lots_preserve_schema_and_descending_cycle_order(self) -> None:
+        trades = [
+            trade(6, "2026-01-05", "09:00:00", "SELL", 100, 1100, stock_code="000002"),
+            trade(3, "2026-01-03", "09:30:00", "BUY", 100, 1000, stock_code="000001"),
+            trade(1, "2026-01-01", "09:30:00", "BUY", 100, 1000, stock_code="000001"),
+            trade(5, "2026-01-05", "09:00:00", "SELL", 100, 1200, stock_code="000001"),
+            trade(4, "2026-01-04", "09:30:00", "BUY", 100, 1000, stock_code="000002"),
+            trade(2, "2026-01-02", "10:00:00", "SELL", 100, 1100, stock_code="000001"),
+        ]
+
+        rows = broker_like_realized_lots(trades, {"000001": "ONE", "000002": "TWO"})
+
+        expected_keys = {
+            "stock_code",
+            "stock_name",
+            "buy_date",
+            "last_buy_date",
+            "sell_date",
+            "sell_time",
+            "close_trade_quantity",
+            "cycle_buy_quantity",
+            "cycle_sell_quantity",
+            "position_quantity_before_sell",
+            "broker_like_average_cost_before_sell",
+            "broker_like_cost_basis_before_sell",
+            "sell_proceeds_after_fees",
+            "broker_like_realized_pnl_after_fees",
+            "is_position_close",
+            "cycle_id",
+            "holding_days",
+            "return_pct",
+        }
+        self.assertEqual(
+            [(row["sell_date"], row["sell_time"], row["stock_code"]) for row in rows],
+            [
+                ("2026-01-05", "09:00:00", "000002"),
+                ("2026-01-05", "09:00:00", "000001"),
+                ("2026-01-02", "10:00:00", "000001"),
+            ],
+        )
+        for row in rows:
+            self.assertEqual(set(row), expected_keys)
+
     def test_same_day_flat_and_reentry_stays_in_one_cycle(self) -> None:
         trades = [
             trade(1, "2026-01-01", "09:30:00", "BUY", 100, 1000),
