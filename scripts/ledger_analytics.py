@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 import sqlite3
 from collections import defaultdict, deque
 from dataclasses import dataclass
@@ -20,6 +23,7 @@ class Trade:
     side: str
     quantity: float
     amount: float
+    price: float = 0.0
     net_amount: float = 0.0
     fees: float = 0.0
 
@@ -96,6 +100,7 @@ def load_trades(conn: sqlite3.Connection) -> list[Trade]:
           side,
           coalesce(quantity, 0) as quantity,
           coalesce(amount, 0) as amount,
+          coalesce(price, 0) as price,
           coalesce(net_amount, 0) as net_amount,
           coalesce(commission, 0)
             + coalesce(stamp_tax, 0)
@@ -118,6 +123,7 @@ def load_trades(conn: sqlite3.Connection) -> list[Trade]:
                 side=str(row["side"] or ""),
                 quantity=number(row["quantity"]),
                 amount=number(row["amount"]),
+                price=number(row["price"]),
                 net_amount=number(row["net_amount"]),
                 fees=number(row["fees"]),
             )
@@ -236,77 +242,197 @@ def future_same_day_buys(trades: list[Trade]) -> set[int]:
     return rows_with_future_buy
 
 
-def broker_like_realized_lots(trades: list[Trade], display_names: dict[str, str]) -> list[dict[str, Any]]:
-    quantities: dict[str, float] = defaultdict(float)
-    costs: dict[str, float] = defaultdict(float)
-    last_flat_date: dict[str, str] = {}
-    cycle_first_buy_date: dict[str, str] = {}
-    cycle_last_buy_date: dict[str, str] = {}
-    cycle_buy_quantity: dict[str, float] = defaultdict(float)
-    cycle_sell_quantity: dict[str, float] = defaultdict(float)
-    realized_rows: list[dict[str, Any]] = []
-    same_day_reentry_after_sell = future_same_day_buys(trades)
+def cycle_id_for_trade(trade: Trade) -> str:
+    price = trade.price if trade.price else (trade.amount / trade.quantity if trade.quantity else 0.0)
+    net_amount = trade.net_amount
+    if abs(net_amount) <= 1e-9:
+        net_amount = -buy_cost_after_fees(trade) if trade.side == "BUY" else sell_proceeds_after_fees(trade)
+    facts = {
+        "stock_code": trade.stock_code,
+        "trade_date": trade.trade_date,
+        "trade_time": trade.trade_time,
+        "side": trade.side,
+        "quantity": round(trade.quantity, 6),
+        "price": round(price, 6),
+        "net_amount": round(net_amount, 6),
+    }
+    digest = hashlib.sha1(
+        json.dumps(facts, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:8]
+    compact_date = re.sub(r"\D", "", trade.trade_date)
+    return f"cyc_{trade.stock_code}_{compact_date}_{digest}"
 
-    for trade in trades:
+
+def _cycle_event(trade: Trade) -> dict[str, Any]:
+    price = trade.price if trade.price else (trade.amount / trade.quantity if trade.quantity else 0.0)
+    return {
+        "rowid": trade.rowid,
+        "trade_date": trade.trade_date,
+        "trade_time": trade.trade_time,
+        "side": trade.side,
+        "quantity": money(trade.quantity),
+        "price": round(price, 4),
+        "amount": money(trade.amount),
+        "net_amount": money(trade.net_amount),
+        "fees": money(trade.fees),
+    }
+
+
+def broker_like_cycles(trades: list[Trade], display_names: dict[str, str]) -> list[dict[str, Any]]:
+    ordered = sorted(trades, key=lambda row: (row.trade_date, row.trade_time, row.rowid))
+    same_day_reentry_after_sell = future_same_day_buys(ordered)
+    active: dict[str, dict[str, Any]] = {}
+    completed: list[dict[str, Any]] = []
+
+    for trade in ordered:
         code = trade.stock_code
         if not code or trade.quantity <= 0:
             continue
-
+        state = active.get(code)
         if trade.side == "BUY":
-            if quantities[code] <= 1e-9 and last_flat_date.get(code) != trade.trade_date:
-                costs[code] = 0.0
-                cycle_first_buy_date[code] = trade.trade_date
-                cycle_buy_quantity[code] = 0.0
-                cycle_sell_quantity[code] = 0.0
-            elif code not in cycle_first_buy_date:
-                cycle_first_buy_date[code] = trade.trade_date
-            cycle_last_buy_date[code] = trade.trade_date
-            cycle_buy_quantity[code] += trade.quantity
-            quantities[code] += trade.quantity
-            costs[code] += buy_cost_after_fees(trade)
+            if state is None:
+                state = {
+                    "cycle_id": cycle_id_for_trade(trade),
+                    "status": "open",
+                    "stock_code": code,
+                    "stock_name": display_names.get(code, trade.stock_name),
+                    "first_buy_date": trade.trade_date,
+                    "first_buy_time": trade.trade_time,
+                    "last_buy_date": trade.trade_date,
+                    "last_buy_time": trade.trade_time,
+                    "quantity": 0.0,
+                    "rolling_cost": 0.0,
+                    "buy_quantity": 0.0,
+                    "sell_quantity": 0.0,
+                    "buy_cost": 0.0,
+                    "sell_proceeds": 0.0,
+                    "events": [],
+                }
+                active[code] = state
+            state["last_buy_date"] = trade.trade_date
+            state["last_buy_time"] = trade.trade_time
+            state["quantity"] += trade.quantity
+            state["rolling_cost"] += buy_cost_after_fees(trade)
+            state["buy_quantity"] += trade.quantity
+            state["buy_cost"] += buy_cost_after_fees(trade)
+            state["events"].append(_cycle_event(trade))
             continue
 
-        before_quantity = quantities[code]
-        before_cost = costs[code]
-        sell_proceeds = sell_proceeds_after_fees(trade)
-        matched_qty = min(trade.quantity, before_quantity) if before_quantity > 1e-9 else 0.0
-        if matched_qty > 1e-9:
-            cycle_sell_quantity[code] += matched_qty
-
-        quantities[code] -= trade.quantity
-        costs[code] -= sell_proceeds
-        if quantities[code] <= 1e-9:
-            quantities[code] = 0.0
-            last_flat_date[code] = trade.trade_date
-            if trade.rowid not in same_day_reentry_after_sell:
-                pnl = -costs[code]
-                realized_rows.append(
-                    {
-                        "stock_code": trade.stock_code,
-                        "stock_name": display_names.get(trade.stock_code, trade.stock_name),
-                        "buy_date": cycle_first_buy_date.get(code, ""),
-                        "last_buy_date": cycle_last_buy_date.get(code, ""),
-                        "sell_date": trade.trade_date,
-                        "sell_time": trade.trade_time,
-                        "close_trade_quantity": money(matched_qty),
-                        "cycle_buy_quantity": money(cycle_buy_quantity[code]),
-                        "cycle_sell_quantity": money(cycle_sell_quantity[code]),
-                        "position_quantity_before_sell": money(before_quantity),
-                        "broker_like_average_cost_before_sell": money(before_cost / before_quantity) if before_quantity else None,
-                        "broker_like_cost_basis_before_sell": money(before_cost),
-                        "sell_proceeds_after_fees": money(sell_proceeds),
-                        "broker_like_realized_pnl_after_fees": money(pnl),
-                        "is_position_close": True,
-                    }
-                )
-                cycle_first_buy_date.pop(code, None)
-                cycle_last_buy_date.pop(code, None)
-                cycle_buy_quantity[code] = 0.0
-                cycle_sell_quantity[code] = 0.0
+        if state is None:
+            continue
+        before_quantity = state["quantity"]
+        before_cost = state["rolling_cost"]
+        proceeds = sell_proceeds_after_fees(trade)
+        state["quantity"] = max(before_quantity - trade.quantity, 0.0)
+        state["rolling_cost"] -= proceeds
+        state["sell_quantity"] += min(trade.quantity, before_quantity)
+        state["sell_proceeds"] += proceeds
+        state["events"].append(_cycle_event(trade))
+        if state["quantity"] > 1e-9 or trade.rowid in same_day_reentry_after_sell:
             continue
 
-    realized_rows.sort(key=lambda row: (row["sell_date"], row["sell_time"], row["stock_code"]), reverse=True)
-    return realized_rows
+        realized = -state["rolling_cost"]
+        duration = holding_days(state["first_buy_date"], trade.trade_date)
+        completed.append(
+            {
+                "cycle_id": state["cycle_id"],
+                "status": "closed",
+                "stock_code": code,
+                "stock_name": state["stock_name"],
+                "first_buy_date": state["first_buy_date"],
+                "first_buy_time": state["first_buy_time"],
+                "last_buy_date": state["last_buy_date"],
+                "last_buy_time": state["last_buy_time"],
+                "close_date": trade.trade_date,
+                "close_time": trade.trade_time,
+                "holding_days": duration,
+                "buy_quantity": money(state["buy_quantity"]),
+                "sell_quantity": money(state["sell_quantity"]),
+                "open_quantity": 0.0,
+                "buy_cost_after_fees": money(state["buy_cost"]),
+                "sell_proceeds_after_fees": money(state["sell_proceeds"]),
+                "rolling_cost_basis_after_fees": 0.0,
+                "realized_pnl_after_fees": money(realized),
+                "return_pct": round(realized / state["buy_cost"] * 100, 2) if state["buy_cost"] else None,
+                "position_quantity_before_close": money(before_quantity),
+                "close_trade_quantity": money(min(trade.quantity, before_quantity)),
+                "close_cost_basis_before_sell": money(before_cost),
+                "close_average_cost_before_sell": money(before_cost / before_quantity) if before_quantity else None,
+                "close_sell_proceeds_after_fees": money(proceeds),
+                "events": list(state["events"]),
+            }
+        )
+        del active[code]
+
+    open_cycles = []
+    for state in active.values():
+        open_cycles.append(
+            {
+                "cycle_id": state["cycle_id"],
+                "status": "open",
+                "stock_code": state["stock_code"],
+                "stock_name": state["stock_name"],
+                "first_buy_date": state["first_buy_date"],
+                "first_buy_time": state["first_buy_time"],
+                "last_buy_date": state["last_buy_date"],
+                "last_buy_time": state["last_buy_time"],
+                "close_date": "",
+                "close_time": "",
+                "holding_days": None,
+                "buy_quantity": money(state["buy_quantity"]),
+                "sell_quantity": money(state["sell_quantity"]),
+                "open_quantity": money(state["quantity"]),
+                "buy_cost_after_fees": money(state["buy_cost"]),
+                "sell_proceeds_after_fees": money(state["sell_proceeds"]),
+                "rolling_cost_basis_after_fees": money(state["rolling_cost"]),
+                "realized_pnl_after_fees": None,
+                "return_pct": None,
+                "position_quantity_before_close": None,
+                "close_trade_quantity": None,
+                "close_cost_basis_before_sell": None,
+                "close_average_cost_before_sell": None,
+                "close_sell_proceeds_after_fees": None,
+                "events": list(state["events"]),
+            }
+        )
+    return sorted(
+        [*completed, *open_cycles],
+        key=lambda row: (row["first_buy_date"], row["first_buy_time"], row["stock_code"]),
+    )
+
+
+def broker_like_realized_lots(trades: list[Trade], display_names: dict[str, str]) -> list[dict[str, Any]]:
+    rows = []
+    for cycle in broker_like_cycles(trades, display_names):
+        if cycle["status"] != "closed":
+            continue
+        rows.append(
+            {
+                "stock_code": cycle["stock_code"],
+                "stock_name": cycle["stock_name"],
+                "buy_date": cycle["first_buy_date"],
+                "last_buy_date": cycle["last_buy_date"],
+                "sell_date": cycle["close_date"],
+                "sell_time": cycle["close_time"],
+                "close_trade_quantity": cycle["close_trade_quantity"],
+                "cycle_buy_quantity": cycle["buy_quantity"],
+                "cycle_sell_quantity": cycle["sell_quantity"],
+                "position_quantity_before_sell": cycle["position_quantity_before_close"],
+                "broker_like_average_cost_before_sell": cycle["close_average_cost_before_sell"],
+                "broker_like_cost_basis_before_sell": cycle["close_cost_basis_before_sell"],
+                "sell_proceeds_after_fees": cycle["close_sell_proceeds_after_fees"],
+                "broker_like_realized_pnl_after_fees": cycle["realized_pnl_after_fees"],
+                "is_position_close": True,
+                "cycle_id": cycle["cycle_id"],
+                "holding_days": cycle["holding_days"],
+                "return_pct": cycle["return_pct"],
+            }
+        )
+    return sorted(
+        rows,
+        key=lambda row: (row["sell_date"], row["sell_time"], row["stock_code"]),
+        reverse=True,
+    )
 
 
 def broker_like_sell_impacts(trades: list[Trade], display_names: dict[str, str]) -> list[dict[str, Any]]:

@@ -11,7 +11,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from ledger_analytics import CashAdjustment, Trade, broker_like_realized_by_stock, broker_like_realized_lots, rolling_cost_positions  # noqa: E402
+from ledger_analytics import (  # noqa: E402
+    CashAdjustment,
+    Trade,
+    broker_like_cycles,
+    broker_like_realized_by_stock,
+    broker_like_realized_lots,
+    cycle_id_for_trade,
+    rolling_cost_positions,
+)
 
 
 def trade(
@@ -23,6 +31,7 @@ def trade(
     amount: float,
     fees: float = 0.0,
     net_amount: float = 0.0,
+    price: float | None = None,
 ) -> Trade:
     return Trade(
         rowid=rowid,
@@ -33,6 +42,7 @@ def trade(
         side=side,
         quantity=quantity,
         amount=amount,
+        price=amount / quantity if price is None and quantity else (price or 0.0),
         net_amount=net_amount,
         fees=fees,
     )
@@ -131,6 +141,67 @@ class RollingCostPositionsTest(unittest.TestCase):
         self.assertEqual(by_stock[0]["broker_like_realized_pnl_after_fees"], -100)
         self.assertEqual(by_stock[0]["cash_adjustment_amount"], 160)
         self.assertEqual(by_stock[0]["broker_like_total_pnl_after_fees"], 60)
+
+
+class BrokerLikeCyclesTest(unittest.TestCase):
+    def test_same_day_flat_and_reentry_stays_in_one_cycle(self) -> None:
+        trades = [
+            trade(1, "2026-01-01", "09:30:00", "BUY", 100, 1000),
+            trade(2, "2026-01-02", "10:00:00", "SELL", 100, 1200),
+            trade(3, "2026-01-02", "14:00:00", "BUY", 100, 1100),
+            trade(4, "2026-01-03", "10:00:00", "SELL", 100, 900),
+        ]
+
+        cycles = broker_like_cycles(trades, {"000001": "TEST"})
+
+        self.assertEqual(len(cycles), 1)
+        self.assertEqual(cycles[0]["status"], "closed")
+        self.assertEqual(cycles[0]["first_buy_date"], "2026-01-01")
+        self.assertEqual(cycles[0]["close_date"], "2026-01-03")
+        self.assertEqual(cycles[0]["holding_days"], 2)
+        self.assertEqual(cycles[0]["realized_pnl_after_fees"], 0.0)
+        self.assertEqual(len(cycles[0]["events"]), 4)
+
+    def test_next_day_reentry_starts_a_second_cycle(self) -> None:
+        trades = [
+            trade(1, "2026-01-01", "09:30:00", "BUY", 100, 1000),
+            trade(2, "2026-01-02", "10:00:00", "SELL", 100, 1200),
+            trade(3, "2026-01-03", "09:30:00", "BUY", 100, 1100),
+        ]
+
+        cycles = broker_like_cycles(trades, {"000001": "TEST"})
+
+        self.assertEqual([row["status"] for row in cycles], ["closed", "open"])
+        self.assertNotEqual(cycles[0]["cycle_id"], cycles[1]["cycle_id"])
+
+    def test_cycle_id_is_unchanged_when_the_cycle_later_closes(self) -> None:
+        first = trade(1, "2026-01-01", "09:30:00", "BUY", 100, 1000, net_amount=-1000)
+        open_cycle = broker_like_cycles([first], {"000001": "TEST"})[0]
+        closed_cycle = broker_like_cycles(
+            [first, trade(2, "2026-01-02", "10:00:00", "SELL", 100, 1200, net_amount=1200)],
+            {"000001": "TEST"},
+        )[0]
+
+        self.assertEqual(open_cycle["cycle_id"], closed_cycle["cycle_id"])
+        self.assertEqual(open_cycle["cycle_id"], cycle_id_for_trade(first))
+
+    def test_broker_cost_regression_is_preserved_in_canonical_cycle(self) -> None:
+        trades = [
+            trade(1, "2026-06-30", "", "BUY", 400, 40388, 5),
+            trade(2, "2026-07-01", "11:14:25", "SELL", 400, 49040, 30.40),
+            trade(3, "2026-07-01", "14:39:20", "BUY", 500, 59639, 7.16),
+            trade(4, "2026-07-02", "09:37:26", "BUY", 500, 56795, 6.82),
+            trade(5, "2026-07-02", "14:52:26", "SELL", 500, 55915, 34.66),
+            trade(6, "2026-07-03", "09:54:18", "BUY", 800, 86608, 10.39),
+            trade(7, "2026-07-07", "14:56:45", "SELL", 1200, 117516, 72.87),
+            trade(8, "2026-07-08", "13:12:00", "BUY", 1500, 151080, 18.13),
+            trade(9, "2026-07-09", "10:01:38", "SELL", 1600, 152000, 94.24),
+        ]
+
+        cycle = broker_like_cycles(trades, {"000001": "TEST"})[0]
+
+        self.assertEqual(cycle["close_average_cost_before_sell"], 107.64)
+        self.assertEqual(cycle["realized_pnl_after_fees"], -20318.67)
 
 
 if __name__ == "__main__":
