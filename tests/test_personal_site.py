@@ -5,7 +5,9 @@ import sys
 import tempfile
 import unittest
 from datetime import date
+from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +17,44 @@ if str(SCRIPTS) not in sys.path:
 
 import build_personal_site as site  # noqa: E402
 from ledger_import import write_sqlite  # noqa: E402
+
+
+class LocalHrefParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.hrefs: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() != "a":
+            return
+        href = dict(attrs).get("href")
+        if href is not None:
+            self.hrefs.append(href)
+
+
+def assert_generated_site_integrity(test: unittest.TestCase, output: Path) -> None:
+    html_files = sorted(output.rglob("*.html"))
+    for source in html_files:
+        content = source.read_text(encoding="utf-8")
+        test.assertNotIn("file://", content, str(source.relative_to(output)))
+        test.assertNotIn("/Users/", content, str(source.relative_to(output)))
+
+        parser = LocalHrefParser()
+        parser.feed(content)
+        for href in parser.hrefs:
+            parsed = urlsplit(href)
+            if parsed.scheme.lower() in {"http", "https", "mailto"} or not parsed.path:
+                continue
+            target = (source.parent / unquote(parsed.path)).resolve()
+            test.assertTrue(
+                target.exists(),
+                f"{source.relative_to(output)} -> {href} (missing target: {target})",
+            )
+
+    site_data = output / "site_data.json"
+    content = site_data.read_text(encoding="utf-8")
+    test.assertNotIn("file://", content, "site_data.json")
+    test.assertNotIn("/Users/", content, "site_data.json")
 
 
 class MarkToMarketTests(unittest.TestCase):
@@ -502,6 +542,16 @@ class SiteGenerationTests(unittest.TestCase):
                                         "source_paths": [],
                                     }
                                     for cycle_id in cycle_ids
+                                ]
+                                + [
+                                    {
+                                        "cycle_id": "missing-historical-cycle",
+                                        "evidence_type": "historical_reference",
+                                        "execution_result": "insufficient",
+                                        "evidence_direction": "indeterminate",
+                                        "note": "待修复历史关联",
+                                        "source_paths": [],
+                                    }
                                 ],
                             }
                         ],
@@ -512,6 +562,7 @@ class SiteGenerationTests(unittest.TestCase):
             )
 
             written = site.write_site(sqlite_path, reports, output, state_dir=state, as_of_date=date(2026, 7, 11))
+            assert_generated_site_integrity(self, output)
 
             expected_pages = {"index", "timeline", "stories", "modes", "ledger", "rules", "data"}
             self.assertTrue(expected_pages.issubset(written))
@@ -543,7 +594,10 @@ class SiteGenerationTests(unittest.TestCase):
         self.assertIn('id="mode-mode-a"', modes_html)
         self.assertIn("3 / 3", modes_html)
         self.assertIn("已达人工评审门槛", modes_html)
-        self.assertIn("历史参考", modes_html)
+        self.assertIn('正式样本</h3></div><span class="count-label">3 项', modes_html)
+        self.assertIn('历史参考</h3></div><span class="count-label">1 项', modes_html)
+        self.assertIn("周期关联待修复", modes_html)
+        self.assertIn("missing-historical-cycle", modes_html)
         closed_cycle_id = next(
             str(cycle["cycle_id"])
             for cycle in cycle_data
