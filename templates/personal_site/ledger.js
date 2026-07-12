@@ -422,9 +422,10 @@
 
     function restoreFromUrl() {
       const params = new URLSearchParams(location.search);
-      readListState(params);
       try {
-        lastValidWindow = resolveWindow(params, dataset.bounds);
+        const nextWindow = resolveWindow(params, dataset.bounds);
+        readListState(params);
+        lastValidWindow = nextWindow;
         showError('');
         render(lastValidWindow);
         writeUrl('replace');
