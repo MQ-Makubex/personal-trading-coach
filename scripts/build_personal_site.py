@@ -290,13 +290,11 @@ def extract_research_pool_candidates(markdown_text: str) -> list[dict[str, str]]
                 row_index += 1
                 continue
             if len(row) <= required_width:
-                row_index += 1
-                continue
+                break
             code = row[columns["stock_code"]]
             name = row[columns["stock_name"]]
             if not re.fullmatch(r"\d{6}", code) or not name:
-                row_index += 1
-                continue
+                break
             output.append(
                 {
                     "stock_code": code,

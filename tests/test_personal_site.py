@@ -187,6 +187,32 @@ class WorkbenchArtifactTest(unittest.TestCase):
 
         self.assertEqual([row["stock_code"] for row in rows], ["300001"])
 
+    def test_research_pool_parser_stops_at_pipe_bearing_prose(self) -> None:
+        markdown = (
+            "| 代码 | 名称 | 题材 | 买点 |\n"
+            "| --- | --- | --- | --- |\n"
+            "| 300001 | 候选1 | 先进封装 | 20日线 |\n"
+            "说明 | 额外 | 不是表格\n"
+            "| 300002 | 不应读取 | 其他 | 突破 |\n"
+        )
+
+        rows = site.extract_research_pool_candidates(markdown)
+
+        self.assertEqual([row["stock_code"] for row in rows], ["300001"])
+
+    def test_research_pool_parser_stops_at_short_malformed_pipe_row(self) -> None:
+        markdown = (
+            "| 代码 | 名称 | 题材 | 买点 |\n"
+            "| --- | --- | --- | --- |\n"
+            "| 300001 | 候选1 | 先进封装 | 20日线 |\n"
+            "| 300002 |\n"
+            "| 300003 | 不应读取 | 其他 | 突破 |\n"
+        )
+
+        rows = site.extract_research_pool_candidates(markdown)
+
+        self.assertEqual([row["stock_code"] for row in rows], ["300001"])
+
     def test_missing_target_document_falls_back_and_marks_stale(self) -> None:
         documents = [
             {
