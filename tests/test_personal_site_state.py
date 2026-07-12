@@ -227,6 +227,31 @@ class TradingModeStateTest(unittest.TestCase):
 
                 self.assertIsNone(result["error"])
 
+    def test_state_paths_are_canonicalized_and_reject_obfuscated_unsafe_forms(self) -> None:
+        payload = valid_modes_payload([valid_mode([valid_sample("cycle-a", source_paths=["reports\\run\\note.md"])])])
+        payload["coach_gate"]["source_path"] = "reports\\run\\coach_note.md"  # type: ignore[index]
+        payload["mode_eligibility"] = [valid_eligibility(source_path="reports\\run\\eligibility.md")]
+
+        result = load_modes_payload(payload)
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["coach_gate"]["source_path"], "reports/run/coach_note.md")
+        self.assertEqual(result["mode_eligibility"][0]["source_path"], "reports/run/eligibility.md")
+        self.assertEqual(result["modes"][0]["samples"][0]["source_paths"], ["reports/run/note.md"])
+
+        unsafe_paths = (
+            "javascript:alert(1)",
+            "https://example.com/private.md",
+            "reports/%252e%252e/private.md",
+            "reports/run/coach\x00note.md",
+            "reports/run/coach\x7fnote.md",
+        )
+        for unsafe_path in unsafe_paths:
+            with self.subTest(unsafe_path=repr(unsafe_path)):
+                invalid = valid_modes_payload([])
+                invalid["coach_gate"]["source_path"] = unsafe_path  # type: ignore[index]
+                self.assert_mode_repair_state(load_modes_payload(invalid))
+
     def test_every_state_path_field_rejects_windows_parent_traversal(self) -> None:
         def gate_payload() -> dict[str, object]:
             payload = valid_modes_payload([])
@@ -465,6 +490,12 @@ class DisciplineStateTest(unittest.TestCase):
 
         self.assert_discipline_repair_state(result)
         self.assertNotIn("..\\private.md", result["error"])
+
+    def test_message_source_path_is_canonicalized_at_ingestion(self) -> None:
+        result = load_discipline_payload([message(source_path="reports\\run\\guard.md")])
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["messages"][0]["source_path"], "reports/run/guard.md")
 
     def test_allowed_message_enum_values(self) -> None:
         enum_values = {

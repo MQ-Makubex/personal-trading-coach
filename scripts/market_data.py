@@ -217,41 +217,6 @@ def ma_state(rel: float | None) -> str:
     return "下方"
 
 
-def ma_first_hand_score(close: float | None, metrics: dict[str, float | None]) -> tuple[int, list[str], list[str]]:
-    score = 0
-    reasons: list[str] = []
-    risks: list[str] = []
-    if close is None:
-        return 0, [], ["缺少收盘价，无法判断均线先手。"]
-
-    rels = {window: relation_pct(close, metrics.get(f"ma{window}")) for window in MA_WINDOWS}
-    if any(rels[window] is not None and -1.5 <= rels[window] <= 2.5 for window in (5, 10)):
-        score += 12
-        reasons.append("贴近 5/10 日线，具备短线回踩观察价值。")
-    if rels.get(20) is not None and -2 <= rels[20] <= 3:
-        score += 10
-        reasons.append("贴近 20 日线，可作为中短线纪律锚点。")
-    if rels.get(50) is not None and -2 <= rels[50] <= 5:
-        score += 8
-        reasons.append("贴近 50 日线，趋势修复边界较清楚。")
-    if rels.get(200) is not None and -2 <= rels[200] <= 6:
-        score += 12
-        reasons.append("贴近 200 日线，适合验证长期均线修复。")
-    if all(rels.get(window) is not None and rels[window] >= 0 for window in (5, 10, 20)):
-        score += 8
-        reasons.append("收盘位于 5/10/20 日线之上，短线结构较完整。")
-
-    for window in (5, 10):
-        rel = rels.get(window)
-        if rel is not None and rel > 8:
-            risks.append(f"高于 {window} 日线 {rel:.2f}%，先手性下降，追高风险上升。")
-    for window in (20, 50, 200):
-        rel = rels.get(window)
-        if rel is not None and rel < -3:
-            risks.append(f"低于 {window} 日线 {abs(rel):.2f}%，需要先证明不是破位。")
-    return score, reasons, risks
-
-
 def summarize_daily_series(series: DailySeries) -> dict[str, Any]:
     bars = [bar for bar in series.bars if bar.close is not None]
     latest = bars[-1] if bars else None
@@ -280,10 +245,6 @@ def summarize_daily_series(series: DailySeries) -> dict[str, Any]:
         metrics[f"ma{window}"] = moving_average(closes, window)
         metrics[f"ma{window}_relation_pct"] = relation_pct(metrics.get("close"), metrics.get(f"ma{window}"))
         metrics[f"ma{window}_state"] = ma_state(metrics.get(f"ma{window}_relation_pct"))
-    score, reasons, risks = ma_first_hand_score(metrics.get("close"), metrics)
-    metrics["ma_first_hand_score"] = score
-    metrics["ma_first_hand_reasons"] = "；".join(reasons)
-    metrics["ma_first_hand_risks"] = "；".join(risks)
     metrics["ma_summary"] = "；".join(
         f"{window}日:{metrics.get(f'ma{window}_state')}" for window in MA_WINDOWS
     )

@@ -41,9 +41,6 @@ ENRICH_FIELDS = [
     "ma50_state",
     "ma200_state",
     "ma_summary",
-    "ma_first_hand_score",
-    "ma_first_hand_reasons",
-    "ma_first_hand_risks",
     "data_notes",
 ]
 
@@ -141,7 +138,7 @@ def enrich_rows(args: argparse.Namespace) -> tuple[list[str], list[dict[str, Any
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="用 AKShare/BaoStock 给候选池补齐日线、均线和均线先手分。")
+    parser = argparse.ArgumentParser(description="用 AKShare/BaoStock 给候选池补齐日线和均线事实。")
     parser.add_argument("universe_csv", type=Path)
     parser.add_argument("--trade-date", default=date.today().isoformat())
     parser.add_argument("--provider", choices=["auto", "akshare", "baostock"], default="auto")

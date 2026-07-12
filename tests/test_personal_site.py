@@ -23,8 +23,12 @@ class LocalHrefParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.hrefs: list[str] = []
+        self.ids: set[str] = set()
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        element_id = dict(attrs).get("id")
+        if element_id:
+            self.ids.add(element_id)
         if tag.lower() != "a":
             return
         href = dict(attrs).get("href")
@@ -34,6 +38,7 @@ class LocalHrefParser(HTMLParser):
 
 def assert_generated_site_integrity(test: unittest.TestCase, output: Path) -> None:
     html_files = sorted(output.rglob("*.html"))
+    parsers: dict[Path, LocalHrefParser] = {}
     for source in html_files:
         content = source.read_text(encoding="utf-8")
         test.assertNotIn("file://", content, str(source.relative_to(output)))
@@ -41,15 +46,27 @@ def assert_generated_site_integrity(test: unittest.TestCase, output: Path) -> No
 
         parser = LocalHrefParser()
         parser.feed(content)
+        parsers[source.resolve()] = parser
         for href in parser.hrefs:
             parsed = urlsplit(href)
-            if parsed.scheme.lower() in {"http", "https", "mailto"} or not parsed.path:
+            if parsed.scheme.lower() in {"http", "https", "mailto"}:
                 continue
-            target = (source.parent / unquote(parsed.path)).resolve()
+            target = (source.parent / unquote(parsed.path)).resolve() if parsed.path else source.resolve()
             test.assertTrue(
                 target.exists(),
                 f"{source.relative_to(output)} -> {href} (missing target: {target})",
             )
+            if parsed.fragment and target.suffix.lower() == ".html":
+                target_parser = parsers.get(target)
+                if target_parser is None:
+                    target_parser = LocalHrefParser()
+                    target_parser.feed(target.read_text(encoding="utf-8"))
+                    parsers[target] = target_parser
+                test.assertIn(
+                    unquote(parsed.fragment),
+                    target_parser.ids,
+                    f"{source.relative_to(output)} -> {href} (missing fragment)",
+                )
 
     site_data = output / "site_data.json"
     content = site_data.read_text(encoding="utf-8")
@@ -360,6 +377,9 @@ class HomepageRendererTests(unittest.TestCase):
     def test_gate_and_eligibility_render_reasons_dates_next_check_and_source(self) -> None:
         html = site.render_coach_state(
             {
+                "state_source_documents": {
+                    "reports/run-20260711/coach_note.md": "documents/coach-note.html",
+                },
                 "trading_state": {
                     "coach_gate": gate(
                         "observe",
@@ -391,8 +411,9 @@ class HomepageRendererTests(unittest.TestCase):
         self.assertIn("已有三次正式样本", html)
         self.assertIn("&lt;先核验 &amp; &quot;边界&quot;", html)
         self.assertIn("2026-07-13", html)
-        self.assertIn('href="reports/run-20260711/coach_note.md"', html)
-        self.assertIn('href="reports/run-20260712/mode_check.md"', html)
+        self.assertIn('href="documents/coach-note.html"', html)
+        self.assertNotIn('href="reports/run-20260712/mode_check.md"', html)
+        self.assertIn("reports/run-20260712/mode_check.md", html)
 
     def test_discipline_renderer_shows_active_message_metadata_and_escapes_text(self) -> None:
         html = site.render_discipline_feed(
@@ -406,13 +427,14 @@ class HomepageRendererTests(unittest.TestCase):
                     }
                 ],
                 "error": None,
-            }
+            },
+            {"reports/run-20260712/guard.md": "documents/guard.html"},
         )
 
         self.assertIn("红牌", html)
         self.assertIn("2026-07-12T09:30:00+08:00", html)
         self.assertIn("&lt;不要追涨 &amp; &quot;确认&quot;", html)
-        self.assertIn('href="reports/run-20260712/guard.md"', html)
+        self.assertIn('href="documents/guard.html"', html)
 
     def test_empty_and_error_states_are_rendered_explicitly(self) -> None:
         empty_html = site.render_discipline_feed({"messages": [], "error": None})
@@ -489,6 +511,17 @@ class HomepageRendererTests(unittest.TestCase):
 
 
 class SiteGenerationTests(unittest.TestCase):
+    def test_integrity_check_rejects_missing_local_targets_and_fragments(self) -> None:
+        for href in ("missing.html", "target.html#missing"):
+            with self.subTest(href=href), tempfile.TemporaryDirectory() as tmp:
+                output = Path(tmp)
+                (output / "index.html").write_text(f'<a href="{href}">broken</a>', encoding="utf-8")
+                (output / "target.html").write_text('<div id="present"></div>', encoding="utf-8")
+                (output / "site_data.json").write_text("{}", encoding="utf-8")
+
+                with self.assertRaises(AssertionError):
+                    assert_generated_site_integrity(self, output)
+
     def test_write_site_generates_multiple_pages_and_unified_markdown_details(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -546,8 +579,16 @@ class SiteGenerationTests(unittest.TestCase):
                 json.dumps(
                     {
                         "version": 1,
-                        "coach_gate": gate("observe"),
-                        "mode_eligibility": [],
+                        "coach_gate": gate("observe", source_path=f"reports/{run.name}/coach_note.md"),
+                        "mode_eligibility": [
+                            {
+                                "mode_id": "mode-a",
+                                "status": "observe",
+                                "target_date": "2026-07-11",
+                                "reasons": ["等待人工核验"],
+                                "source_path": "reports/missing/mode_check.md",
+                            }
+                        ],
                         "modes": [
                             {
                                 "id": "mode-a",
@@ -567,7 +608,7 @@ class SiteGenerationTests(unittest.TestCase):
                                         "execution_result": "planned",
                                         "evidence_direction": "support",
                                         "note": "按计划执行",
-                                        "source_paths": [],
+                                        "source_paths": [f"reports/{run.name}/coach_note.md"],
                                     }
                                     for cycle_id in cycle_ids
                                 ]
@@ -581,6 +622,30 @@ class SiteGenerationTests(unittest.TestCase):
                                         "source_paths": [],
                                     }
                                 ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (state / "discipline_feed.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "messages": [
+                            {
+                                "id": "fixture-reminder",
+                                "status": "active",
+                                "level": "reminder",
+                                "scope": "global",
+                                "stock_code": "",
+                                "mode_id": "",
+                                "message": "复核来源链接",
+                                "source_path": f"reports/{run.name}/coach_note.md",
+                                "effective_at": "2026-07-01T00:00:00+00:00",
+                                "expires_at": "",
+                                "created_at": "2026-07-01T00:00:00+00:00",
                             }
                         ],
                     },
@@ -645,7 +710,10 @@ class SiteGenerationTests(unittest.TestCase):
         self.assertEqual(index_html.count("data-pool-row"), 15)
         self.assertIn("data-pool-scroll", index_html)
         self.assertIn("data-discipline-feed", index_html)
-        self.assertIn("暂无已发布纪律消息", index_html)
+        self.assertIn("复核来源链接", index_html)
+        self.assertGreaterEqual(index_html.count(f'href="documents/{coach_detail.name}"'), 2)
+        self.assertNotIn('href="reports/missing/mode_check.md"', index_html)
+        self.assertIn("reports/missing/mode_check.md", index_html)
         self.assertIn("交易股票数", index_html)
         self.assertIn("完整周期", index_html)
         self.assertIn("平均持股自然日", index_html)
@@ -711,6 +779,10 @@ class SiteGenerationTests(unittest.TestCase):
         self.assertEqual(len(data["ledger_dataset"]["cycles"]), 3)
         self.assertIn("modes", data["trading_state"])
         self.assertIn("messages", data["discipline_feed"])
+        self.assertEqual(
+            data["state_source_documents"][f"reports/{run.name}/coach_note.md"],
+            f"documents/{coach_detail.name}",
+        )
         self.assertNotIn(str(root), json.dumps(data, ensure_ascii=False))
         self.assertNotIn("/Users/", json.dumps(data, ensure_ascii=False))
 

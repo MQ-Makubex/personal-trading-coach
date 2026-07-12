@@ -412,6 +412,29 @@ def collect_timeline_documents(reports_dir: Path, output_dir: Path) -> list[dict
     return documents
 
 
+def map_state_source_documents(
+    trading_state: dict[str, Any], discipline_feed: dict[str, Any], documents: list[dict[str, Any]]
+) -> dict[str, str]:
+    document_paths = {
+        str(document.get("source_path") or ""): str(document.get("document_path") or "")
+        for document in documents
+    }
+    state_paths = [str(trading_state.get("coach_gate", {}).get("source_path") or "")]
+    state_paths.extend(str(row.get("source_path") or "") for row in trading_state.get("mode_eligibility", []))
+    for mode in trading_state.get("modes", []):
+        for sample in mode.get("samples", []):
+            state_paths.extend(str(path or "") for path in sample.get("source_paths", []))
+    state_paths.extend(str(row.get("source_path") or "") for row in discipline_feed.get("messages", []))
+
+    mapped: dict[str, str] = {}
+    for source_path in state_paths:
+        match_path = source_path[len("reports/") :] if source_path.startswith("reports/") else source_path
+        document_path = document_paths.get(match_path)
+        if source_path and document_path:
+            mapped[source_path] = document_path
+    return mapped
+
+
 def extract_latest_quotes(reports_dir: Path, positions: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     wanted = {
         str(position.get("stock_code") or ""): (
@@ -730,6 +753,7 @@ def build_data(
     documents = collect_timeline_documents(reports_dir, output_dir)
     trading_state = load_trading_modes(state_dir / "trading_modes.json", {row["cycle_id"]: row for row in cycles})
     discipline_feed = load_discipline_feed(state_dir / "discipline_feed.json")
+    state_source_documents = map_state_source_documents(trading_state, discipline_feed, documents)
     target_date = resolve_workbench_target_date(documents, as_of_date or datetime.now().date())
     selected_plan = select_daily_document(documents, "trade_plan", target_date)
     selected_pool = select_daily_document(documents, "research_pool", target_date)
@@ -788,6 +812,7 @@ def build_data(
         "ledger_dataset": ledger_dataset,
         "trading_state": trading_state,
         "discipline_feed": discipline_feed,
+        "state_source_documents": state_source_documents,
         "workbench": {
             "target_date": target_date,
             "trade_plan": selected_plan,
@@ -965,14 +990,14 @@ def safe_relative_href(value: Any) -> str | None:
     return raw
 
 
-def state_source_link(source_path: Any) -> str:
+def state_source_link(source_path: Any, source_documents: dict[str, str]) -> str:
     source = str(source_path or "")
     if not source:
         return '<span class="state-source muted">暂无来源</span>'
-    href = safe_relative_href(source)
-    if href is None:
-        return f'<span class="state-source mono">{esc(source)}</span>'
-    return f'<a class="state-source mono" href="{esc(href)}">{esc(source)}</a>'
+    href = source_documents.get(source)
+    if href and safe_relative_href(href):
+        return f'<a class="state-source mono" href="{esc(href)}">{esc(source)}</a>'
+    return f'<span class="state-source mono">{esc(source)}</span>'
 
 
 def state_reasons(reasons: Any) -> str:
@@ -982,6 +1007,7 @@ def state_reasons(reasons: Any) -> str:
 
 def render_coach_state(data: dict[str, Any]) -> str:
     state = data["trading_state"]
+    source_documents = data.get("state_source_documents", {})
     gate = state["coach_gate"]
     gate_status = str(gate.get("status") or "pending")
     eligibility_rows = []
@@ -990,12 +1016,18 @@ def render_coach_state(data: dict[str, Any]) -> str:
         mode_id = str(item.get("mode_id") or "")
         status = str(item.get("status") or "pending")
         target = str(item.get("target_date") or "待核验")
+        mode_name = modes_by_id.get(mode_id) or mode_id
+        mode_label = (
+            f'<a href="modes.html#mode-{esc(mode_id)}"><strong>{esc(mode_name)}</strong></a>'
+            if mode_id in modes_by_id
+            else f"<strong>{esc(mode_name)}</strong>"
+        )
         eligibility_rows.append(
             f"""<article class="eligibility-row status-{esc(status)}">
-              <div><a href="modes.html#mode-{esc(mode_id)}"><strong>{esc(modes_by_id.get(mode_id) or mode_id)}</strong></a><span class="state-status">{esc(GATE_COPY.get(status, GATE_COPY['pending']))}</span></div>
+              <div>{mode_label}<span class="state-status">{esc(GATE_COPY.get(status, GATE_COPY['pending']))}</span></div>
               <small>目标日 <time class="mono">{esc(target)}</time></small>
               <ul>{state_reasons(item.get('reasons'))}</ul>
-              {state_source_link(item.get('source_path'))}
+              {state_source_link(item.get('source_path'), source_documents)}
             </article>"""
         )
     eligibility_html = "".join(eligibility_rows) or '<div class="state-empty">当前没有已发布的模式资格判断</div>'
@@ -1006,7 +1038,7 @@ def render_coach_state(data: dict[str, Any]) -> str:
       <div class="coach-gate status-{esc(gate_status)}" data-coach-gate>
         <div class="state-heading"><div><span>教练闸门</span><strong>{esc(GATE_COPY.get(gate_status, GATE_COPY['pending']))}</strong></div><time class="mono">目标日 {esc(gate_target)}</time></div>
         <ul>{state_reasons(gate.get('reasons'))}</ul>
-        <div class="state-footer"><span>下次核验：{esc(next_check)}</span>{state_source_link(gate.get('source_path'))}</div>
+        <div class="state-footer"><span>下次核验：{esc(next_check)}</span>{state_source_link(gate.get('source_path'), source_documents)}</div>
       </div>
       <div class="mode-eligibility" data-mode-eligibility>
         <div class="state-heading"><div><span>模式资格</span><strong>独立判断</strong></div></div>
@@ -1071,12 +1103,12 @@ def render_holdings(positions: list[dict[str, Any]]) -> str:
     return "".join(rows) or '<div class="workbench-empty">当前无持仓</div>'
 
 
-def discipline_meta(message: dict[str, Any]) -> str:
+def discipline_meta(message: dict[str, Any], source_documents: dict[str, str]) -> str:
     level = "红牌" if message.get("level") == "red_card" else "提醒"
     created_at = str(message.get("created_at") or "待核验")
     source = str(message.get("source_path") or "")
-    href = safe_relative_href(source)
-    if href:
+    href = source_documents.get(source)
+    if href and safe_relative_href(href):
         source_html = f'<a href="{esc(href)}">来源</a>'
     elif source:
         source_html = f'<span>来源：{esc(source)}</span>'
@@ -1085,9 +1117,10 @@ def discipline_meta(message: dict[str, Any]) -> str:
     return f'<small><span>{level}</span><time class="mono">{esc(created_at)}</time>{source_html}</small>'
 
 
-def render_discipline_feed(feed: dict[str, Any]) -> str:
+def render_discipline_feed(feed: dict[str, Any], source_documents: dict[str, str] | None = None) -> str:
+    source_documents = source_documents or {}
     messages = [
-        f'<article class="discipline-message"><p>{esc(message.get("message"))}</p>{discipline_meta(message)}</article>'
+        f'<article class="discipline-message"><p>{esc(message.get("message"))}</p>{discipline_meta(message, source_documents)}</article>'
         for message in feed.get("messages", [])
     ]
     if messages:
@@ -1109,7 +1142,7 @@ def render_workbench(data: dict[str, Any]) -> str:
         <div class="workbench-heading"><div><span>POSITIONS & DISCIPLINE</span><h2>当前持仓</h2></div><strong class="count-label">{len(data['open_positions'])} 支</strong></div>
         <div class="position-list">{render_holdings(data['open_positions'])}</div>
         <div class="discipline-heading"><strong>纪律消息</strong></div>
-        {render_discipline_feed(data['discipline_feed'])}
+        {render_discipline_feed(data['discipline_feed'], data.get('state_source_documents', {}))}
       </div>
     </section>"""
 
@@ -1567,6 +1600,7 @@ def public_site_data(data: dict[str, Any]) -> dict[str, Any]:
         "trading_state": data["trading_state"],
         "modes": data["trading_state"].get("modes", []),
         "discipline_feed": data["discipline_feed"],
+        "state_source_documents": data["state_source_documents"],
         "workbench": data["workbench"],
         "generated_at": data["generated_at"],
     }

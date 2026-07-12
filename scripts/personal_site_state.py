@@ -6,8 +6,9 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 
 GATE_STATUSES = {"pending", "locked", "observe", "eligible"}
@@ -45,11 +46,27 @@ def default_discipline_feed() -> dict[str, Any]:
     return {"version": 1, "messages": [], "error": None}
 
 
-def _is_project_relative(value: str) -> bool:
-    for candidate in (PurePosixPath(value), PureWindowsPath(value)):
-        if candidate.is_absolute() or candidate.drive or candidate.root or ".." in candidate.parts:
-            return False
-    return True
+def canonical_project_relative_path(value: str) -> str:
+    normalized = value.strip()
+    while True:
+        decoded = unquote(normalized)
+        if decoded == normalized:
+            break
+        normalized = decoded
+    normalized = normalized.replace("\\", "/")
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in normalized):
+        raise StateValidationError("path")
+    if normalized.startswith("/") or normalized.startswith("//"):
+        raise StateValidationError("path")
+    if len(normalized) >= 2 and normalized[0].isalpha() and normalized[1] == ":":
+        raise StateValidationError("path")
+    first_segment = normalized.split("/", 1)[0]
+    if ":" in first_segment:
+        raise StateValidationError("path")
+    parts = [part for part in normalized.split("/") if part not in {"", "."}]
+    if ".." in parts:
+        raise StateValidationError("path")
+    return "/".join(parts)
 
 
 def _repair(default: dict[str, Any], reason: str) -> dict[str, Any]:
@@ -90,9 +107,10 @@ def _require_enum(value: Any, field: str, allowed: set[str]) -> str:
 
 def _require_relative_path(value: Any, field: str) -> str:
     path = _require_string(value, field, allow_empty=True)
-    if not _is_project_relative(path):
-        raise StateValidationError(field)
-    return path
+    try:
+        return canonical_project_relative_path(path)
+    except StateValidationError as exc:
+        raise StateValidationError(field) from exc
 
 
 def _require_version(value: Any) -> int:
@@ -153,9 +171,10 @@ def _validate_mode_eligibility(value: Any) -> list[dict[str, Any]]:
 
 def _validate_sample(value: Any, cycles_by_id: dict[str, dict[str, Any]]) -> dict[str, Any]:
     sample = _require_mapping(value, "sample")
-    source_paths = _require_string_list(sample.get("source_paths"), "sample.source_paths")
-    if not all(_is_project_relative(path) for path in source_paths):
-        raise StateValidationError("sample.source_paths")
+    source_paths = [
+        _require_relative_path(path, "sample.source_paths")
+        for path in _require_list(sample.get("source_paths"), "sample.source_paths")
+    ]
     cycle_id = _require_string(sample.get("cycle_id"), "sample.cycle_id")
     cycle = cycles_by_id.get(cycle_id)
     cycle_found = isinstance(cycle, dict)

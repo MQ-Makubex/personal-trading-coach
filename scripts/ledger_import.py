@@ -7,7 +7,6 @@ import argparse
 import csv
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
 
@@ -57,23 +56,11 @@ def to_float(value: object) -> float | None:
         return None
 
 
-def normalize_date(value: object) -> str:
-    text = str(value or "").strip()
-    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y%m%d"):
-        try:
-            return datetime.strptime(text, fmt).strftime("%Y-%m-%d")
-        except ValueError:
-            continue
-    return text
-
-
 def read_csv(path: Path) -> tuple[list[dict[str, str]], list[str]]:
     with path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         headers = reader.fieldnames or []
         rows = [{field: str(row.get(field, "") or "").strip() for field in FIELDS} for row in reader]
-    for row in rows:
-        row["trade_date"] = normalize_date(row.get("trade_date"))
     return rows, headers
 
 
