@@ -875,7 +875,8 @@ td a > strong { color: var(--text); font-weight: 500; }
   .stock-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .stock-metrics .metric-cell:nth-child(3) { border-left: 1px solid var(--line); border-top: 0; }
   .stock-metrics .metric-cell:nth-child(4) { border-left: 0; border-top: 1px solid var(--line); }
-  .stock-metrics .metric-cell:nth-child(5) { border-top: 1px solid var(--line); }
+  .stock-metrics .metric-cell:nth-child(5),
+  .stock-metrics .metric-cell:nth-child(6) { border-top: 1px solid var(--line); }
 }
 
 @media (max-width: 980px) {
