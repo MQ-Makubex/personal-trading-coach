@@ -481,6 +481,7 @@ class SiteGenerationTests(unittest.TestCase):
             timeline_html = written["timeline"].read_text(encoding="utf-8")
             stories_html = written["stories"].read_text(encoding="utf-8")
             ledger_html = written["ledger"].read_text(encoding="utf-8")
+            ledger_js_exists = (output / "assets" / "ledger.js").exists()
             rules_html = written["rules"].read_text(encoding="utf-8")
             detail_pages = sorted((output / "documents").glob("*.html"))
             stock_pages = sorted((output / "stocks").glob("*.html"))
@@ -514,8 +515,24 @@ class SiteGenerationTests(unittest.TestCase):
         self.assertIn("data-calendar-date", timeline_html)
         self.assertIn("当前持仓", stories_html)
         self.assertIn("历史故事", stories_html)
-        self.assertIn("data-pnl-app", ledger_html)
-        self.assertIn("data-pnl-row", ledger_html)
+        self.assertTrue(ledger_js_exists)
+        self.assertIn('src="assets/ledger.js"', ledger_html)
+        self.assertIn('id="ledgerData"', ledger_html)
+        self.assertIn("data-current-account-facts", ledger_html)
+        self.assertLess(ledger_html.index("data-current-account-facts"), ledger_html.index("data-ledger-app"))
+        for grain in ("all", "day", "week", "month", "year", "custom"):
+            self.assertIn(f'data-ledger-grain="{grain}"', ledger_html)
+        for target in (
+            "data-period-realized",
+            "data-period-cycles",
+            "data-period-win-rate",
+            "data-period-profit-factor",
+            "data-period-fees",
+            "data-period-stocks",
+            "data-ledger-trades",
+            "data-ledger-stocks",
+        ):
+            self.assertIn(target, ledger_html)
         self.assertIn('id="pnlSearch"', ledger_html)
         self.assertIn('id="pnlPage"', ledger_html)
         self.assertGreaterEqual(len(detail_pages), 4)
@@ -545,6 +562,7 @@ class SiteGenerationTests(unittest.TestCase):
         self.assertIn("modes", data["trading_state"])
         self.assertIn("messages", data["discipline_feed"])
         self.assertNotIn(str(root), json.dumps(data, ensure_ascii=False))
+        self.assertNotIn("/Users/", json.dumps(data, ensure_ascii=False))
 
     def test_homepage_marks_fallback_plan_with_source_date_and_link(self) -> None:
         data = {

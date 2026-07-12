@@ -15,7 +15,7 @@ from dataclasses import asdict
 from datetime import date, datetime
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 from urllib.parse import unquote
 
 from ledger_analytics import (
@@ -738,8 +738,16 @@ def nav_html(active: str, prefix: str) -> str:
     return "".join(links)
 
 
-def page_shell(title: str, active: str, content: str, generated_at: str, depth: int = 0) -> str:
+def page_shell(
+    title: str,
+    active: str,
+    content: str,
+    generated_at: str,
+    depth: int = 0,
+    extra_scripts: Sequence[str] = (),
+) -> str:
     prefix = "../" * depth
+    script_tags = "".join(f'\n  <script src="{esc(prefix + path)}" defer></script>' for path in extra_scripts)
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -764,7 +772,7 @@ def page_shell(title: str, active: str, content: str, generated_at: str, depth: 
     {content}
   </main>
   <footer class="site-footer"><span>本地私密站 · 生成于 {esc(generated_at)}</span><span>不荐股，不预测涨跌。</span></footer>
-  <script src="{prefix}assets/site.js" defer></script>
+  <script src="{prefix}assets/site.js" defer></script>{script_tags}
 </body>
 </html>"""
 
@@ -1112,38 +1120,63 @@ def trade_rows_html(trades: list[dict[str, Any]], prefix: str = "") -> str:
 
 
 def render_ledger(data: dict[str, Any]) -> str:
-    pnl_rows = []
-    story_map = {story["stock_code"]: story for story in data["stories"]}
-    for row in sorted(
-        data["realized_by_stock"],
-        key=lambda item: number(item.get("broker_like_total_pnl_after_fees", item.get("broker_like_realized_pnl_after_fees"))),
-    ):
-        code = str(row.get("stock_code") or "")
-        pnl = number(row.get("broker_like_total_pnl_after_fees", row.get("broker_like_realized_pnl_after_fees")))
-        story = story_map.get(code)
-        status = story["status_label"] if story else "历史关闭"
-        search = f"{code} {row.get('stock_name') or ''} {status}"
-        pnl_rows.append(
-            f"""<tr data-pnl-row data-search="{esc(search)}"><td><a href="stocks/{esc(code)}.html"><strong>{esc(row.get('stock_name'))}</strong><small class="mono">{esc(code)}</small></a></td><td class="num">{qty(row.get('closed_quantity'))}</td><td class="num {value_class(pnl)}">{money(pnl)}</td><td class="num">{pct(row.get('broker_like_realized_return_pct'))}</td><td>{esc(status)}</td></tr>"""
-        )
+    bounds = data["ledger_dataset"]["bounds"]
+    ledger_json = json.dumps(data["ledger_dataset"], ensure_ascii=False, separators=(",", ":"))
+    ledger_json = ledger_json.replace("<", "\\u003c").replace("&", "\\u0026")
+    account_facts = metrics_html(data).replace(
+        '<section class="metrics-band"',
+        '<section class="metrics-band" data-current-account-facts',
+        1,
+    )
     return f"""
       <header class="page-heading"><div><span class="page-context mono">ACCOUNT LEDGER</span><h1>交易底账</h1><p>费用、成交、已实现与持仓浮动使用同一套可复核口径。</p></div></header>
-      {metrics_html(data)}
+      {account_facts}
       <section class="formula-band"><strong>核算公式</strong><code>总盈亏 = 已实现盈亏 + 当前持仓市值 - 券商式持仓成本</code><span>费用已进入买入成本和卖出净收入，总费用只披露，不再次扣减。</span></section>
       <section class="work-surface" data-ledger-app data-page-size="20">
-        <div class="section-heading"><div><h2>成交流水</h2><p>可按股票、日期和方向检索。</p></div><span class="count-label">{len(data['trades'])} 笔</span></div>
-        <div class="filter-row"><label class="field"><span>搜索流水</span><input id="ledgerSearch" type="search" placeholder="股票、代码或日期…" autocomplete="off"></label><div class="segmented" role="group" aria-label="买卖方向"><button type="button" data-ledger-filter="all" aria-pressed="true">全部</button><button type="button" data-ledger-filter="buy" aria-pressed="false">买入</button><button type="button" data-ledger-filter="sell" aria-pressed="false">卖出</button></div></div>
-        <div class="table-scroll"><table><thead><tr><th>日期 / 时间</th><th>股票</th><th>方向</th><th class="num">数量</th><th class="num">价格</th><th class="num">金额</th><th class="num">费用</th></tr></thead><tbody>{trade_rows_html(data['trades'])}</tbody></table></div>
-        <div class="empty-state" id="ledgerEmpty" hidden>没有符合条件的成交记录。</div>
-        <nav class="pagination" aria-label="成交分页"><button type="button" data-page-prev>上一页</button><span id="ledgerPage" class="mono"></span><button type="button" data-page-next>下一页</button></nav>
+        <div class="section-heading"><div><h2>区间工作台</h2><p>统计、流水和单票结果共享同一日期区间。</p></div></div>
+        <div class="segmented" role="group" aria-label="时间粒度">
+          <button type="button" data-ledger-grain="all" aria-pressed="true">全部</button>
+          <button type="button" data-ledger-grain="day" aria-pressed="false">日</button>
+          <button type="button" data-ledger-grain="week" aria-pressed="false">周</button>
+          <button type="button" data-ledger-grain="month" aria-pressed="false">月</button>
+          <button type="button" data-ledger-grain="year" aria-pressed="false">年</button>
+          <button type="button" data-ledger-grain="custom" aria-pressed="false">自定义</button>
+        </div>
+        <nav class="pagination period-navigation" aria-label="周期导航">
+          <button type="button" data-ledger-prev aria-label="上一周期">←</button>
+          <strong data-ledger-period-label>全部历史</strong>
+          <button type="button" data-ledger-next aria-label="下一周期">→</button>
+        </nav>
+        <div class="filter-row custom-range" data-ledger-custom hidden>
+          <label class="field" for="ledgerFrom"><span>开始日期</span><input id="ledgerFrom" type="date" min="{esc(bounds['minimum'])}" max="{esc(bounds['maximum'])}"></label>
+          <label class="field" for="ledgerTo"><span>结束日期</span><input id="ledgerTo" type="date" min="{esc(bounds['minimum'])}" max="{esc(bounds['maximum'])}"></label>
+          <button class="text-action" type="button" data-ledger-apply-custom>应用区间</button>
+        </div>
+        <p class="field-error loss" data-ledger-error role="alert" hidden></p>
+        <section class="metrics-band period-metrics" data-period-metrics aria-label="区间指标">
+          <div class="metric-cell metric-primary"><span>区间已实现盈亏</span><strong class="mono" data-period-realized>—</strong><small>完整周期及区间证券现金调整</small></div>
+          <div class="metric-cell"><span>区间完整周期</span><strong class="mono" data-period-cycles>—</strong><small>按最终清仓日期归入区间</small></div>
+          <div class="metric-cell"><span>区间周期胜率</span><strong class="mono" data-period-win-rate>—</strong><small>盈利周期 / 完整周期</small></div>
+          <div class="metric-cell"><span>区间利润因子</span><strong class="mono" data-period-profit-factor>—</strong><small>盈利总额 / 亏损总额</small></div>
+          <div class="metric-cell"><span>区间费用</span><strong class="mono" data-period-fees>—</strong><small>区间成交费用合计</small></div>
+          <div class="metric-cell"><span>区间交易股票</span><strong class="mono" data-period-stocks>—</strong><small>六位证券代码去重</small></div>
+        </section>
+        <section data-ledger-trades>
+          <div class="section-heading"><div><h2>区间成交流水</h2><p>可按股票、日期和方向检索。</p></div><span class="count-label" data-ledger-trade-count>0 笔</span></div>
+          <div class="filter-row"><label class="field"><span>搜索流水</span><input id="ledgerSearch" type="search" placeholder="股票、代码或日期…" autocomplete="off"></label><div class="segmented" role="group" aria-label="买卖方向"><button type="button" data-ledger-filter="all" aria-pressed="true">全部</button><button type="button" data-ledger-filter="buy" aria-pressed="false">买入</button><button type="button" data-ledger-filter="sell" aria-pressed="false">卖出</button></div></div>
+          <div class="table-scroll"><table><thead><tr><th>日期 / 时间</th><th>股票</th><th>方向</th><th class="num">数量</th><th class="num">价格</th><th class="num">金额</th><th class="num">费用</th></tr></thead><tbody data-ledger-trade-body></tbody></table></div>
+          <div class="empty-state" id="ledgerEmpty" hidden>没有符合条件的成交记录。</div>
+          <nav class="pagination" aria-label="成交分页"><button type="button" data-page-prev>上一页</button><span id="ledgerPage" class="mono"></span><button type="button" data-page-next>下一页</button></nav>
+        </section>
+        <section data-ledger-stocks>
+          <div class="section-heading"><div><h2>区间单票结果</h2><p>完整周期与区间证券现金调整按股票汇总。</p></div><span class="count-label" data-ledger-stock-count>0 支</span></div>
+          <div class="filter-row"><label class="field"><span>搜索单票结果</span><input id="pnlSearch" type="search" placeholder="股票名称或代码…" autocomplete="off"></label></div>
+          <div class="table-scroll"><table><thead><tr><th>股票</th><th class="num">完整周期</th><th class="num">周期盈亏</th><th class="num">现金调整</th><th class="num">区间总盈亏</th></tr></thead><tbody data-ledger-stock-body></tbody></table></div>
+          <div class="empty-state" id="pnlEmpty" hidden>没有符合条件的单票结果。</div>
+          <nav class="pagination" aria-label="单票结果分页"><button type="button" data-pnl-page-prev>上一页</button><span id="pnlPage" class="mono"></span><button type="button" data-pnl-page-next>下一页</button></nav>
+        </section>
       </section>
-      <section class="work-surface" data-pnl-app data-page-size="20">
-        <div class="section-heading"><div><h2>全历史单票盈亏</h2><p>证券现金调整已计入对应股票，可按名称或代码检索。</p></div><span class="count-label">{len(pnl_rows)} 支</span></div>
-        <div class="filter-row"><label class="field"><span>搜索单票盈亏</span><input id="pnlSearch" type="search" placeholder="股票名称或代码…" autocomplete="off"></label></div>
-        <div class="table-scroll"><table><thead><tr><th>股票</th><th class="num">平仓数量</th><th class="num">已实现总盈亏</th><th class="num">收益率</th><th>故事状态</th></tr></thead><tbody>{''.join(pnl_rows)}</tbody></table></div>
-        <div class="empty-state" id="pnlEmpty" hidden>没有符合条件的单票盈亏记录。</div>
-        <nav class="pagination" aria-label="单票盈亏分页"><button type="button" data-page-prev>上一页</button><span id="pnlPage" class="mono"></span><button type="button" data-page-next>下一页</button></nav>
-      </section>
+      <script type="application/json" id="ledgerData">{ledger_json}</script>
     """
 
 
@@ -1271,6 +1304,7 @@ def write_site(
     data = build_data(sqlite_path, reports_dir, output_dir, state_dir, as_of_date)
     (assets_dir / "site.css").write_text((ASSET_SOURCE / "site.css").read_text(encoding="utf-8"), encoding="utf-8")
     (assets_dir / "site.js").write_text((ASSET_SOURCE / "site.js").read_text(encoding="utf-8"), encoding="utf-8")
+    (assets_dir / "ledger.js").write_text((ASSET_SOURCE / "ledger.js").read_text(encoding="utf-8"), encoding="utf-8")
 
     pages = {
         "index": output_dir / "index.html",
@@ -1283,7 +1317,16 @@ def write_site(
     pages["index"].write_text(page_shell("今日", "home", render_home(data), data["generated_at"]), encoding="utf-8")
     pages["timeline"].write_text(page_shell("训练时间线", "timeline", render_timeline(data), data["generated_at"]), encoding="utf-8")
     pages["stories"].write_text(page_shell("股票故事", "stories", render_stories(data), data["generated_at"]), encoding="utf-8")
-    pages["ledger"].write_text(page_shell("交易底账", "ledger", render_ledger(data), data["generated_at"]), encoding="utf-8")
+    pages["ledger"].write_text(
+        page_shell(
+            "交易底账",
+            "ledger",
+            render_ledger(data),
+            data["generated_at"],
+            extra_scripts=("assets/ledger.js",),
+        ),
+        encoding="utf-8",
+    )
     pages["rules"].write_text(page_shell("纪律规则", "rules", render_rules(data), data["generated_at"]), encoding="utf-8")
     pages["data"].write_text(json.dumps(public_site_data(data), ensure_ascii=False, indent=2), encoding="utf-8")
 
