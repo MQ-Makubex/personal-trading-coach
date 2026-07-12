@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "coach_gate": {
+    "status": "pending",
+    "target_date": null,
+    "reasons": [],
+    "next_check": "",
+    "source_path": ""
+  },
+  "mode_eligibility": [],
+  "modes": []
+}

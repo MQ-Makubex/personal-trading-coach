@@ -20,6 +20,8 @@ STATE_FILES = [
     "personal_trading_modes.md",
     "research_pool_protocol.md",
     "decision_events.md",
+    "trading_modes.json",
+    "discipline_feed.json",
 ]
 
 
