@@ -619,7 +619,7 @@ class SiteGenerationTests(unittest.TestCase):
                                         "execution_result": "insufficient",
                                         "evidence_direction": "indeterminate",
                                         "note": "待修复历史关联",
-                                        "source_paths": [],
+                                        "source_paths": ["reports/missing/sample_evidence.md"],
                                     }
                                 ],
                             }
@@ -691,6 +691,10 @@ class SiteGenerationTests(unittest.TestCase):
         self.assertIn('历史参考</h3></div><span class="count-label">1 项', modes_html)
         self.assertIn("周期关联待修复", modes_html)
         self.assertIn("missing-historical-cycle", modes_html)
+        self.assertIn(f'href="documents/{coach_detail.name}"', modes_html)
+        self.assertIn(f"reports/{run.name}/coach_note.md", modes_html)
+        self.assertIn("reports/missing/sample_evidence.md", modes_html)
+        self.assertNotIn('href="reports/missing/sample_evidence.md"', modes_html)
         closed_cycle_id = next(
             str(cycle["cycle_id"])
             for cycle in cycle_data

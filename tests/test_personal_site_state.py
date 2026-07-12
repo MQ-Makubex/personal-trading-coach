@@ -252,6 +252,14 @@ class TradingModeStateTest(unittest.TestCase):
                 invalid["coach_gate"]["source_path"] = unsafe_path  # type: ignore[index]
                 self.assert_mode_repair_state(load_modes_payload(invalid))
 
+    def test_percent_encoded_unicode_controls_are_rejected_in_trading_mode_paths(self) -> None:
+        for encoded in ("%C2%85", "%E2%80%AE"):
+            with self.subTest(encoded=encoded):
+                payload = valid_modes_payload([])
+                payload["coach_gate"]["source_path"] = f"reports/run/{encoded}note.md"  # type: ignore[index]
+
+                self.assert_mode_repair_state(load_modes_payload(payload))
+
     def test_every_state_path_field_rejects_windows_parent_traversal(self) -> None:
         def gate_payload() -> dict[str, object]:
             payload = valid_modes_payload([])
@@ -496,6 +504,13 @@ class DisciplineStateTest(unittest.TestCase):
 
         self.assertIsNone(result["error"])
         self.assertEqual(result["messages"][0]["source_path"], "reports/run/guard.md")
+
+    def test_percent_encoded_unicode_controls_are_rejected_in_discipline_paths(self) -> None:
+        for encoded in ("%C2%85", "%E2%80%AE"):
+            with self.subTest(encoded=encoded):
+                result = load_discipline_payload([message(source_path=f"reports/run/{encoded}guard.md")])
+
+                self.assert_discipline_repair_state(result)
 
     def test_allowed_message_enum_values(self) -> None:
         enum_values = {

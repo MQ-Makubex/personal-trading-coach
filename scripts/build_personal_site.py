@@ -1237,7 +1237,18 @@ def mode_definition_row(label: str, values: Any) -> str:
     return f'<div class="mode-definition-row"><dt>{esc(label)}</dt><dd>{value_html}</dd></div>'
 
 
-def mode_sample_rows(samples: list[dict[str, Any]]) -> str:
+def mode_sample_sources(sample: dict[str, Any], source_documents: dict[str, str]) -> str:
+    sources = [
+        state_source_link(source_path, source_documents)
+        for source_path in sample.get("source_paths", [])
+        if source_path
+    ]
+    if not sources:
+        return ""
+    return f'<div class="mode-sample-sources"><small>来源</small>{"".join(sources)}</div>'
+
+
+def mode_sample_rows(samples: list[dict[str, Any]], source_documents: dict[str, str]) -> str:
     rows = []
     for sample in samples:
         cycle = sample.get("cycle") if sample.get("cycle_found") else None
@@ -1265,7 +1276,7 @@ def mode_sample_rows(samples: list[dict[str, Any]]) -> str:
               <td class="num">{esc(return_value)}</td>
               <td class="num">{esc(holding_value)}</td>
               <td>{esc(EVIDENCE_DIRECTION_COPY.get(str(sample.get('evidence_direction')), '待核验'))}</td>
-              <td class="mode-sample-note">{esc(sample.get('note'))}</td>
+              <td class="mode-sample-note">{esc(sample.get('note'))}{mode_sample_sources(sample, source_documents)}</td>
             </tr>"""
         )
     return "".join(rows) or '<tr><td colspan="7" class="muted">暂无样本</td></tr>'
@@ -1273,6 +1284,7 @@ def mode_sample_rows(samples: list[dict[str, Any]]) -> str:
 
 def render_modes(data: dict[str, Any]) -> str:
     modes = data.get("trading_state", {}).get("modes", [])
+    source_documents = data.get("state_source_documents", {})
     counts = Counter(str(mode.get("status") or "") for mode in modes)
     filters = [f'<button type="button" data-mode-filter="all" aria-pressed="true">全部 <span>{len(modes)}</span></button>']
     for status in ("validating", "review", "replicable", "avoid"):
@@ -1313,8 +1325,8 @@ def render_modes(data: dict[str, Any]) -> str:
             f"""<article class="mode-entry" id="mode-{esc(mode_id)}" data-mode-item data-status="{esc(status)}" data-search="{esc(search)}">
               <header class="mode-entry-heading"><div><span class="page-context mono">{esc(mode_id)} · v{esc(mode.get('version'))}</span><h2>{esc(mode.get('name') or mode_id)}</h2></div><div class="mode-state"><span>{esc(MODE_STATUS_COPY.get(status, status))}</span><strong class="mono">{mode.get('valid_formal_sample_count', 0)} / 3</strong>{review_ready}</div></header>
               <dl class="mode-definitions">{definitions}</dl>
-              <section class="mode-samples"><div class="section-heading"><div><h3>正式样本</h3></div><span class="count-label">{len(formal_samples)} 项</span></div><div class="mode-table-scroll"><table>{sample_header}<tbody>{mode_sample_rows(formal_samples)}</tbody></table></div></section>
-              <section class="mode-samples"><div class="section-heading"><div><h3>历史参考</h3></div><span class="count-label">{len(historical_samples)} 项</span></div><div class="mode-table-scroll"><table>{sample_header}<tbody>{mode_sample_rows(historical_samples)}</tbody></table></div></section>
+              <section class="mode-samples"><div class="section-heading"><div><h3>正式样本</h3></div><span class="count-label">{len(formal_samples)} 项</span></div><div class="mode-table-scroll"><table>{sample_header}<tbody>{mode_sample_rows(formal_samples, source_documents)}</tbody></table></div></section>
+              <section class="mode-samples"><div class="section-heading"><div><h3>历史参考</h3></div><span class="count-label">{len(historical_samples)} 项</span></div><div class="mode-table-scroll"><table>{sample_header}<tbody>{mode_sample_rows(historical_samples, source_documents)}</tbody></table></div></section>
             </article>"""
         )
     empty_archive = '<div class="empty-state mode-archive-empty"><strong>尚未建立结构化交易模式</strong><span class="mono">0 / 3</span></div>' if not modes else ""

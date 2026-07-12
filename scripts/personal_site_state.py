@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import unicodedata
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,7 +55,7 @@ def canonical_project_relative_path(value: str) -> str:
             break
         normalized = decoded
     normalized = normalized.replace("\\", "/")
-    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in normalized):
+    if any(unicodedata.category(character).startswith("C") for character in normalized):
         raise StateValidationError("path")
     if normalized.startswith("/") or normalized.startswith("//"):
         raise StateValidationError("path")
