@@ -732,7 +732,7 @@ td a > strong { color: var(--text); font-weight: 500; }
   background: var(--yellow-soft);
   font-size: 11px;
 }
-.stock-metrics { grid-template-columns: repeat(5, minmax(160px, 1fr)); }
+.stock-metrics { grid-template-columns: repeat(6, minmax(150px, 1fr)); }
 .stock-metrics .metric-cell > strong { font-size: 20px; }
 .stock-lifetime { min-width: 0; }
 .stock-lifetime .stock-heading { padding-bottom: 14px; }

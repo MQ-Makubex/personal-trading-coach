@@ -753,6 +753,7 @@ class SiteGenerationTests(unittest.TestCase):
         self.assertIn('data-cycle-panel="closed-new" hidden', stock_html)
         for label in ("持股自然日", "财务结果", "周期盈亏", "执行结果", "证据方向", "成交事件", "关联训练记录"):
             self.assertIn(label, stock_html)
+        self.assertIn('<span>中位持股自然日</span><strong class="mono">3</strong>', stock_html)
         self.assertIn('href="#mode-mode-a"', stock_html)
         self.assertIn('href="../documents/cycle-evidence.html"', stock_html)
 

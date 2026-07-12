@@ -1384,6 +1384,7 @@ def render_stock(story: dict[str, Any], generated_at: str) -> str:
           {metric_cell('完整周期', qty(lifetime['closed_cycles']), '已完成买入至清仓', True, semantic=False)}
           {metric_cell('周期胜率', pct(lifetime['win_rate']), '按已关闭周期统计', semantic=False)}
           {metric_cell('平均持股自然日', qty(lifetime['average_holding_days']) if lifetime['average_holding_days'] is not None else '—', '按已关闭周期统计', semantic=False)}
+          {metric_cell('中位持股自然日', qty(lifetime['median_holding_days']) if lifetime['median_holding_days'] is not None else '—', '按已关闭周期统计', semantic=False)}
           {metric_cell('累计已实现盈亏', lifetime['realized_pnl'], '含费用及证券现金调整')}
           {metric_cell('生命周期总盈亏', lifetime['total_pnl'], '持仓缺少核验行情时待核验')}
         </section>
