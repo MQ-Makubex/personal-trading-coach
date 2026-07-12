@@ -50,16 +50,61 @@ class AbilitySummaryTest(unittest.TestCase):
         self.assertEqual(result["average_holding_days"], 4.0)
         self.assertEqual(result["median_holding_days"], 4.0)
 
-    def test_ratio_states_do_not_emit_infinity(self) -> None:
-        no_losses = summarize_cycles([cycle("000001", "2026-07-01", 100, 2)])
-        no_wins = summarize_cycles([cycle("000001", "2026-07-01", -100, 2)])
-        empty = summarize_cycles([])
+    def test_no_samples_states_have_no_metric_values(self) -> None:
+        result = summarize_cycles([])
 
-        self.assertEqual(no_losses["profit_factor_state"], "no_losses")
-        self.assertIsNone(no_losses["profit_factor"])
-        self.assertEqual(no_wins["average_payoff_ratio_state"], "no_wins")
-        self.assertEqual(no_wins["profit_factor"], 0.0)
-        self.assertEqual(empty["win_rate_state"], "no_samples")
+        self.assertEqual(result["closed_cycles"], 0)
+        self.assertEqual(result["winning_cycles"], 0)
+        self.assertEqual(result["losing_cycles"], 0)
+        self.assertIsNone(result["win_rate"])
+        self.assertEqual(result["win_rate_state"], "no_samples")
+        self.assertIsNone(result["average_payoff_ratio"])
+        self.assertEqual(result["average_payoff_ratio_state"], "no_samples")
+        self.assertIsNone(result["profit_factor"])
+        self.assertEqual(result["profit_factor_state"], "no_samples")
+        self.assertIsNone(result["expectancy"])
+        self.assertEqual(result["expectancy_state"], "no_samples")
+        self.assertIsNone(result["average_holding_days"])
+        self.assertIsNone(result["median_holding_days"])
+
+    def test_no_losses_states_do_not_emit_infinity(self) -> None:
+        result = summarize_cycles([cycle("000001", "2026-07-01", 100, 2)])
+
+        self.assertEqual(result["win_rate"], 100.0)
+        self.assertEqual(result["win_rate_state"], "value")
+        self.assertIsNone(result["average_payoff_ratio"])
+        self.assertEqual(result["average_payoff_ratio_state"], "no_losses")
+        self.assertIsNone(result["profit_factor"])
+        self.assertEqual(result["profit_factor_state"], "no_losses")
+        self.assertEqual(result["expectancy"], 100.0)
+        self.assertEqual(result["expectancy_state"], "value")
+
+    def test_no_wins_states_keep_zero_profit_factor(self) -> None:
+        result = summarize_cycles([cycle("000001", "2026-07-01", -100, 2)])
+
+        self.assertEqual(result["win_rate"], 0.0)
+        self.assertEqual(result["win_rate_state"], "value")
+        self.assertIsNone(result["average_payoff_ratio"])
+        self.assertEqual(result["average_payoff_ratio_state"], "no_wins")
+        self.assertEqual(result["profit_factor"], 0.0)
+        self.assertEqual(result["profit_factor_state"], "value")
+        self.assertEqual(result["expectancy"], -100.0)
+        self.assertEqual(result["expectancy_state"], "value")
+
+    def test_breakeven_only_sample_uses_no_losses_precedence(self) -> None:
+        result = summarize_cycles([cycle("000001", "2026-07-01", 0, 2)])
+
+        self.assertEqual(result["closed_cycles"], 1)
+        self.assertEqual(result["winning_cycles"], 0)
+        self.assertEqual(result["losing_cycles"], 0)
+        self.assertEqual(result["win_rate"], 0.0)
+        self.assertEqual(result["win_rate_state"], "value")
+        self.assertIsNone(result["average_payoff_ratio"])
+        self.assertEqual(result["average_payoff_ratio_state"], "no_losses")
+        self.assertIsNone(result["profit_factor"])
+        self.assertEqual(result["profit_factor_state"], "no_losses")
+        self.assertEqual(result["expectancy"], 0.0)
+        self.assertEqual(result["expectancy_state"], "value")
 
 
 class DateWindowTest(unittest.TestCase):
@@ -94,6 +139,14 @@ class DateWindowTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "超出底账日期范围"):
             resolve_window("custom", "", "2025-12-31", "2026-07-01", date(2026, 1, 1), date(2026, 7, 10))
 
+    def test_named_period_without_ledger_overlap_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "超出底账日期范围"):
+            resolve_window("month", "2025-12", "", "", date(2026, 1, 1), date(2026, 7, 10))
+
+    def test_day_and_week_period_shifts(self) -> None:
+        self.assertEqual(shift_period("day", "2026-01-01", -1), "2025-12-31")
+        self.assertEqual(shift_period("week", "2026-01-05", -1), "2025-12-29")
+
 
 class PeriodSummaryTest(unittest.TestCase):
     def test_cycles_use_close_date_while_trades_adjustments_and_fees_use_event_date(self) -> None:
@@ -119,6 +172,51 @@ class PeriodSummaryTest(unittest.TestCase):
         self.assertEqual(summary["fees"], 2.5)
         self.assertEqual(summary["stock_count"], 1)
         self.assertEqual(stocks[0]["total_pnl"], 108.0)
+
+    def test_stock_results_aggregate_adjustments_and_sort_by_absolute_total(self) -> None:
+        cycles = [
+            cycle("000001", "2026-07-02", 100, 5),
+            cycle("000002", "2026-07-03", -85, 2),
+        ]
+        adjustments = [
+            {"trade_date": "2026-07-04", "stock_code": "000001", "stock_name": "A", "net_amount": -20.0},
+            {"trade_date": "2026-07-05", "stock_code": "000001", "stock_name": "A", "net_amount": 5.0},
+            {"trade_date": "2026-07-06", "stock_code": "000003", "stock_name": "C", "net_amount": 120.0},
+        ]
+        window = DateWindow("month", "2026-07", date(2026, 7, 1), date(2026, 7, 31), "2026-07")
+
+        result = period_stock_results(cycles, adjustments, window)
+
+        self.assertEqual([row["stock_code"] for row in result], ["000003", "000001", "000002"])
+        self.assertEqual(
+            result,
+            [
+                {
+                    "stock_code": "000003",
+                    "stock_name": "C",
+                    "cycle_pnl": 0.0,
+                    "cash_adjustments": 120.0,
+                    "total_pnl": 120.0,
+                    "closed_cycles": 0,
+                },
+                {
+                    "stock_code": "000001",
+                    "stock_name": "000001",
+                    "cycle_pnl": 100.0,
+                    "cash_adjustments": -15.0,
+                    "total_pnl": 85.0,
+                    "closed_cycles": 1,
+                },
+                {
+                    "stock_code": "000002",
+                    "stock_name": "000002",
+                    "cycle_pnl": -85.0,
+                    "cash_adjustments": 0.0,
+                    "total_pnl": -85.0,
+                    "closed_cycles": 1,
+                },
+            ],
+        )
 
 
 if __name__ == "__main__":
