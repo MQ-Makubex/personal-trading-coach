@@ -791,6 +791,193 @@ def metrics_html(data: dict[str, Any]) -> str:
     </section>"""
 
 
+def ability_value(value: Any, state: str, suffix: str = "") -> str:
+    if state == "no_samples":
+        return "待积累"
+    if state == "no_losses":
+        return "无亏损样本"
+    if state == "no_wins":
+        return "无盈利样本"
+    if value is None:
+        return "待积累"
+    return f"{number(value):.2f}{suffix}"
+
+
+def render_account_facts(data: dict[str, Any]) -> str:
+    mark = data["mark_to_market"]
+    ability = data["ability"]
+    quote_note = (
+        f"行情截至 {mark['quote_date']}，费用已进入成本口径"
+        if mark["complete"] and mark.get("quote_date")
+        else f"缺少行情：{', '.join(mark['missing_quote_codes']) or '待核验'}"
+    )
+    holding_state = "value" if ability["average_holding_days"] is not None else "no_samples"
+    median_state = "value" if ability["median_holding_days"] is not None else "no_samples"
+    expectancy = money(ability["expectancy"]) if ability["expectancy"] is not None else "待积累"
+    return f"""<section class="account-facts" aria-label="账户事实与交易能力">
+      <div class="account-total"><span>总盈亏（含持仓）</span><strong data-account-total class="mono {value_class(mark['total_pnl'])}">{money(mark['total_pnl'])}</strong><small>{esc(quote_note)}</small></div>
+      <div class="account-fact-grid">
+        <div><span>已实现盈亏</span><strong class="mono {value_class(mark['realized_pnl'])}">{money(mark['realized_pnl'])}</strong></div>
+        <div><span>持仓浮动盈亏</span><strong class="mono {value_class(mark['unrealized_pnl'])}">{money(mark['unrealized_pnl'])}</strong></div>
+        <div><span>总费用</span><strong class="mono">{money(data['summary'].get('total_fees'))}</strong></div>
+        <div><span>交易股票数</span><strong class="mono">{int(number(data['summary'].get('stock_count')))}</strong></div>
+      </div>
+      <div class="ability-rail" data-ability-rail>
+        <div><span>样本与赢面</span><strong class="mono">完整周期 {ability['closed_cycles']} · 胜率 {ability_value(ability['win_rate'], ability['win_rate_state'], '%')}</strong></div>
+        <div><span>盈利质量</span><strong class="mono">盈亏比 {ability_value(ability['average_payoff_ratio'], ability['average_payoff_ratio_state'])} · 利润因子 {ability_value(ability['profit_factor'], ability['profit_factor_state'])}</strong></div>
+        <div><span>周期与持有</span><strong class="mono">期望 {expectancy} · 平均持股自然日 {ability_value(ability['average_holding_days'], holding_state)} · 中位持股自然日 {ability_value(ability['median_holding_days'], median_state)}</strong></div>
+      </div>
+    </section>"""
+
+
+GATE_COPY = {
+    "pending": "待核验",
+    "locked": "风险锁定",
+    "observe": "仅观察",
+    "eligible": "可进入验证",
+}
+
+
+def state_source_link(source_path: Any) -> str:
+    source = str(source_path or "")
+    if not source:
+        return '<span class="state-source muted">暂无来源</span>'
+    return f'<a class="state-source mono" href="{esc(source)}">{esc(source)}</a>'
+
+
+def state_reasons(reasons: Any) -> str:
+    rows = reasons if isinstance(reasons, list) else []
+    return "".join(f"<li>{esc(reason)}</li>" for reason in rows) or "<li>暂无已发布原因</li>"
+
+
+def render_coach_state(data: dict[str, Any]) -> str:
+    state = data["trading_state"]
+    gate = state["coach_gate"]
+    gate_status = str(gate.get("status") or "pending")
+    eligibility_rows = []
+    modes_by_id = {str(mode.get("id") or ""): str(mode.get("name") or "") for mode in state.get("modes", [])}
+    for item in state.get("mode_eligibility", []):
+        mode_id = str(item.get("mode_id") or "")
+        status = str(item.get("status") or "pending")
+        target = str(item.get("target_date") or "待核验")
+        eligibility_rows.append(
+            f"""<article class="eligibility-row status-{esc(status)}">
+              <div><strong>{esc(modes_by_id.get(mode_id) or mode_id)}</strong><span class="state-status">{esc(GATE_COPY.get(status, GATE_COPY['pending']))}</span></div>
+              <small>目标日 <time class="mono">{esc(target)}</time></small>
+              <ul>{state_reasons(item.get('reasons'))}</ul>
+              {state_source_link(item.get('source_path'))}
+            </article>"""
+        )
+    eligibility_html = "".join(eligibility_rows) or '<div class="state-empty">当前没有已发布的模式资格判断</div>'
+    error_html = '<p class="state-error">状态数据待修复</p>' if state.get("error") else ""
+    gate_target = str(gate.get("target_date") or "待核验")
+    next_check = str(gate.get("next_check") or "待发布")
+    return f"""<section class="coach-state" aria-label="教练闸门与模式资格">
+      <div class="coach-gate status-{esc(gate_status)}" data-coach-gate>
+        <div class="state-heading"><div><span>教练闸门</span><strong>{esc(GATE_COPY.get(gate_status, GATE_COPY['pending']))}</strong></div><time class="mono">目标日 {esc(gate_target)}</time></div>
+        <ul>{state_reasons(gate.get('reasons'))}</ul>
+        <div class="state-footer"><span>下次核验：{esc(next_check)}</span>{state_source_link(gate.get('source_path'))}</div>
+      </div>
+      <div class="mode-eligibility" data-mode-eligibility>
+        <div class="state-heading"><div><span>模式资格</span><strong>独立判断</strong></div></div>
+        {error_html}
+        <div class="eligibility-list">{eligibility_html}</div>
+      </div>
+    </section>"""
+
+
+def workbench_document_meta(selected: dict[str, Any]) -> str:
+    document = selected.get("document") or {}
+    source_date = str(selected.get("target_date") or "待核验")
+    stale = '<span class="stale-flag">可能过期</span>' if selected.get("stale") else ""
+    if not document:
+        return f'<div class="workbench-meta"><span>来源日 <time class="mono">{esc(source_date)}</time></span>{stale}</div>'
+    return f"""<div class="workbench-meta"><span>来源日 <time class="mono">{esc(source_date)}</time></span>{stale}<a href="{esc(document.get('document_path'))}">查看原文</a></div>"""
+
+
+def render_trade_plan(workbench: dict[str, Any]) -> str:
+    selected = workbench["trade_plan"]
+    document = selected.get("document") or {}
+    if document:
+        body = f"<strong>{esc(document.get('title'))}</strong><p>{esc(document.get('summary') or '暂无摘要。')}</p>"
+    else:
+        body = '<div class="workbench-empty">暂无已发布交易预案</div>'
+    return f"""<div class="plan-pane" data-trade-plan>
+      <div class="workbench-heading"><div><span>TRADE PLAN</span><h2>交易预案 · <time class="mono">{esc(workbench['target_date'])}</time></h2></div></div>
+      {workbench_document_meta(selected)}
+      <div class="plan-body">{body}</div>
+    </div>"""
+
+
+def render_research_pool(workbench: dict[str, Any]) -> str:
+    selected = workbench["research_pool"]
+    document = selected.get("document") or {}
+    href = str(document.get("document_path") or "")
+    rows = []
+    for candidate in selected.get("candidates", []):
+        content = f"""<span class="pool-identity"><strong>{esc(candidate.get('stock_name'))}</strong><small class="mono">{esc(candidate.get('stock_code'))}</small></span><span><small>题材</small><strong>{esc(candidate.get('theme') or '待核验')}</strong></span><span><small>买点类型</small><strong>{esc(candidate.get('buy_point') or '待核验')}</strong></span>"""
+        tag = "a" if href else "div"
+        href_attr = f' href="{esc(href)}"' if href else ""
+        rows.append(f'<{tag} class="pool-row" data-pool-row{href_attr}>{content}</{tag}>')
+    pool_html = "".join(rows) or '<div class="workbench-empty">暂无已解析股票池候选</div>'
+    return f"""<div class="pool-pane">
+      <div class="workbench-heading"><div><span>RESEARCH POOL</span><h2>完整股票池 · <time class="mono">{esc(workbench['target_date'])}</time></h2></div><strong class="count-label">{len(rows)} 支</strong></div>
+      {workbench_document_meta(selected)}
+      <div class="pool-scroll" data-pool-scroll>{pool_html}</div>
+    </div>"""
+
+
+def render_holdings(positions: list[dict[str, Any]]) -> str:
+    rows = []
+    for row in positions:
+        code = str(row.get("stock_code") or "")
+        rows.append(
+            f"""<a class="home-position-row" href="stocks/{esc(code)}.html">
+              <span><strong>{esc(row.get('stock_name'))}</strong><small class="mono">{esc(code)}</small></span>
+              <span><small>数量</small><strong class="mono">{qty(row.get('open_quantity'))}</strong></span>
+              <span><small>浮动盈亏</small><strong class="mono {value_class(row.get('unrealized_pnl'))}">{money(row.get('unrealized_pnl'))}</strong></span>
+            </a>"""
+        )
+    return "".join(rows) or '<div class="workbench-empty">当前无持仓</div>'
+
+
+def discipline_meta(message: dict[str, Any]) -> str:
+    level = "红牌" if message.get("level") == "red_card" else "提醒"
+    created_at = str(message.get("created_at") or "待核验")
+    source = str(message.get("source_path") or "")
+    source_html = f'<a href="{esc(source)}">来源</a>' if source else "<span>暂无来源</span>"
+    return f'<small><span>{level}</span><time class="mono">{esc(created_at)}</time>{source_html}</small>'
+
+
+def render_discipline_feed(feed: dict[str, Any]) -> str:
+    messages = [
+        f'<article class="discipline-message"><p>{esc(message.get("message"))}</p>{discipline_meta(message)}</article>'
+        for message in feed.get("messages", [])
+    ]
+    if messages:
+        body = "".join(messages)
+    elif feed.get("error"):
+        body = '<div class="discipline-empty">状态数据待修复</div>'
+    else:
+        body = '<div class="discipline-empty">暂无已发布纪律消息</div>'
+    return f'<div class="discipline-feed" data-discipline-feed aria-live="polite">{body}</div>'
+
+
+def render_workbench(data: dict[str, Any]) -> str:
+    workbench = data["workbench"]
+    return f"""<section class="today-workbench" aria-labelledby="today-workbench-title">
+      <h2 class="sr-only" id="today-workbench-title">今日工作台</h2>
+      {render_trade_plan(workbench)}
+      {render_research_pool(workbench)}
+      <div class="position-pane">
+        <div class="workbench-heading"><div><span>POSITIONS & DISCIPLINE</span><h2>当前持仓</h2></div><strong class="count-label">{len(data['open_positions'])} 支</strong></div>
+        <div class="position-list">{render_holdings(data['open_positions'])}</div>
+        <div class="discipline-heading"><strong>纪律消息</strong></div>
+        {render_discipline_feed(data['discipline_feed'])}
+      </div>
+    </section>"""
+
+
 def document_link(item: dict[str, Any], prefix: str = "") -> str:
     stocks = stock_reference_label(item.get("stock_codes", []))
     return f"""<a class="timeline-row" href="{prefix}{esc(item['document_path'])}">
@@ -802,48 +989,11 @@ def document_link(item: dict[str, Any], prefix: str = "") -> str:
 
 def render_home(data: dict[str, Any]) -> str:
     latest_date = str(data["summary"].get("latest_trade_date") or "—")
-    latest_coach = data["latest_by_category"].get("coach_note")
-    risk_copy = first_sentence(
-        str(latest_coach.get("summary") or "")
-        if latest_coach
-        else "暂无教练手记。先完成当日事实核验，再形成判断。"
-    )
-    risk_href = str(latest_coach.get("document_path") or "timeline.html") if latest_coach else "timeline.html"
-    recent_documents = data["documents"][:6]
-    recent_rows = "".join(document_link(item) for item in recent_documents) or '<div class="empty-state">暂无训练记录。</div>'
-    positions = []
-    for row in data["open_positions"]:
-        code = str(row.get("stock_code") or "")
-        positions.append(
-            f"""<a class="position-row" href="stocks/{esc(code)}.html">
-              <span><strong>{esc(row.get('stock_name'))}</strong><small class="mono">{esc(code)}</small></span>
-              <span><small>数量</small><strong class="mono">{qty(row.get('open_quantity'))}</strong></span>
-              <span><small>券商成本</small><strong class="mono">{money(row.get('broker_like_average_cost_after_fees'))}</strong></span>
-              <span><small>浮动盈亏</small><strong class="mono {value_class(row.get('unrealized_pnl'))}">{money(row.get('unrealized_pnl'))}</strong></span>
-            </a>"""
-        )
-    positions_html = "".join(positions) or '<div class="empty-state">当前无持仓故事。</div>'
-    dates = Counter(item["date"] for item in data["documents"] if item["date"])
-    calendar = "".join(
-        f'<a href="timeline.html?date={esc(date)}"><strong class="mono">{esc(date[8:])}</strong><span>{esc(date[5:7])} 月</span><small>{count} 项</small></a>'
-        for date, count in sorted(dates.items(), reverse=True)[:5]
-    )
     return f"""
-      <header class="page-heading"><div><span class="page-context mono">TODAY / {esc(latest_date)}</span><h1>先暴露风险，再允许看机会</h1></div><a class="text-action" href="timeline.html">进入完整时间线</a></header>
-      {metrics_html(data)}
-      <section class="risk-band"><div><span class="risk-label">当前教练判断</span><strong>{esc(risk_copy)}</strong></div><a class="evidence-state" href="{esc(risk_href)}">查看来源：{esc(latest_coach['title'] if latest_coach else '暂无')}</a></section>
-      <div class="work-grid">
-        <section class="work-surface">
-          <div class="section-heading"><div><h2>最近训练日</h2><p>手记、股票池、复盘与成交按交易日归档。</p></div><span class="count-label">{len(data['documents'])} 篇</span></div>
-          <div class="calendar-strip" aria-label="最近训练日期">{calendar}</div>
-          <div class="timeline-list compact">{recent_rows}</div>
-        </section>
-        <aside class="inspector-surface">
-          <div class="section-heading"><div><h2>当前持仓</h2><p>先看风险锚和可处理仓位。</p></div><span class="count-label">{len(data['open_positions'])} 支</span></div>
-          <div class="position-list">{positions_html}</div>
-          <a class="full-action" href="stories.html?status=current">查看持仓故事</a>
-        </aside>
-      </div>
+      <header class="page-heading"><div><span class="page-context mono">COACH DESK / {esc(latest_date)}</span><h1>今日教练桌</h1><p>账户事实、准入状态与当日执行工作台。</p></div><a class="text-action" href="timeline.html">训练时间线</a></header>
+      {render_account_facts(data)}
+      {render_coach_state(data)}
+      {render_workbench(data)}
     """
 
 

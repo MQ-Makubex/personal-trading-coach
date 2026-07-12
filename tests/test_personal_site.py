@@ -284,11 +284,15 @@ class SiteGenerationTests(unittest.TestCase):
                 "# 每日教练手记 - 2026-07-10\n\n## 风险判断\n\n统一渲染验证句。\n",
                 encoding="utf-8",
             )
+            pool_rows = "\n".join(
+                f"| {300000 + index:06d} | 候选{index} | 先进封装 | 20日线回踩 |"
+                for index in range(1, 16)
+            )
             (run / "research_pool.md").write_text(
                 "# 2026-07-11 明日研究股票池\n\n"
                 "| 代码 | 名称 | 题材 | 买点 |\n| --- | --- | --- | --- |\n"
-                "| 688037 | 芯源微 | 先进封装 | 20日线回踩 |\n\n"
-                "688037 仅为候选，不存在底账故事页。\n",
+                f"{pool_rows}\n\n"
+                "300001 仅为候选，不存在底账故事页。\n",
                 encoding="utf-8",
             )
             (run / "trade_plan.md").write_text(
@@ -335,6 +339,18 @@ class SiteGenerationTests(unittest.TestCase):
         self.assertIn("总费用", index_html)
         self.assertIn("¥4.00", index_html)
         self.assertIn('<span>总费用</span><strong class="mono">¥4.00</strong>', index_html)
+        self.assertIn("data-account-total", index_html)
+        self.assertIn("data-ability-rail", index_html)
+        self.assertIn("data-coach-gate", index_html)
+        self.assertIn("data-mode-eligibility", index_html)
+        self.assertEqual(index_html.count("data-pool-row"), 15)
+        self.assertIn("data-pool-scroll", index_html)
+        self.assertIn("data-discipline-feed", index_html)
+        self.assertIn("暂无已发布纪律消息", index_html)
+        self.assertIn("交易股票数", index_html)
+        self.assertIn("完整周期", index_html)
+        self.assertIn("平均持股自然日", index_html)
+        self.assertNotIn("最近训练日", index_html)
         self.assertIn("data-timeline-item", timeline_html)
         self.assertIn("data-calendar-date", timeline_html)
         self.assertIn("当前持仓", stories_html)
@@ -354,15 +370,15 @@ class SiteGenerationTests(unittest.TestCase):
         self.assertIn('<span>券商式持仓成本</span><strong class="mono">¥10.02</strong>', current_stock_html)
         self.assertIn("已清仓，不再计算持仓成本", closed_stock_html)
         self.assertNotIn("行情截至 待核验", closed_stock_html)
-        self.assertNotIn('href="../stocks/688037.html"', pool_html)
-        self.assertIn('<span class="inline-code mono">688037</span>', pool_html)
+        self.assertNotIn('href="../stocks/300001.html"', pool_html)
+        self.assertIn('<span class="inline-code mono">300001</span>', pool_html)
         self.assertEqual(data["mark_to_market"]["realized_pnl"], 197.00)
         self.assertEqual(data["mark_to_market"]["unrealized_pnl"], 119.00)
         self.assertEqual(data["mark_to_market"]["total_pnl"], 316.00)
         self.assertEqual(data["workbench"]["target_date"], "2026-07-11")
         self.assertFalse(data["workbench"]["trade_plan"]["stale"])
-        self.assertEqual(len(data["workbench"]["research_pool"]["candidates"]), 1)
-        self.assertEqual(data["workbench"]["research_pool"]["candidates"][0]["stock_code"], "688037")
+        self.assertEqual(len(data["workbench"]["research_pool"]["candidates"]), 15)
+        self.assertEqual(data["workbench"]["research_pool"]["candidates"][0]["stock_code"], "300001")
         self.assertEqual(data["ability"]["closed_cycles"], 1)
         self.assertEqual(len(data["cycles"]), 2)
         self.assertEqual(data["ledger_dataset"]["bounds"], {"minimum": "2026-07-08", "maximum": "2026-07-10"})
@@ -370,6 +386,65 @@ class SiteGenerationTests(unittest.TestCase):
         self.assertIn("modes", data["trading_state"])
         self.assertIn("messages", data["discipline_feed"])
         self.assertNotIn(str(root), json.dumps(data, ensure_ascii=False))
+
+    def test_homepage_marks_fallback_plan_with_source_date_and_link(self) -> None:
+        data = {
+            "summary": {"latest_trade_date": "2026-07-11", "stock_count": 0, "total_fees": 0},
+            "mark_to_market": {
+                "complete": True,
+                "quote_date": "2026-07-11",
+                "missing_quote_codes": [],
+                "realized_pnl": 0,
+                "unrealized_pnl": 0,
+                "total_pnl": 0,
+            },
+            "ability": {
+                "closed_cycles": 0,
+                "win_rate": None,
+                "win_rate_state": "no_samples",
+                "average_payoff_ratio": None,
+                "average_payoff_ratio_state": "no_samples",
+                "profit_factor": None,
+                "profit_factor_state": "no_samples",
+                "expectancy": None,
+                "average_holding_days": None,
+                "median_holding_days": None,
+            },
+            "trading_state": {
+                "coach_gate": {
+                    "status": "pending",
+                    "target_date": None,
+                    "reasons": [],
+                    "next_check": "",
+                    "source_path": "",
+                },
+                "mode_eligibility": [],
+                "error": None,
+            },
+            "discipline_feed": {"messages": [], "error": None},
+            "open_positions": [],
+            "documents": [],
+            "latest_by_category": {},
+            "workbench": {
+                "target_date": "2026-07-12",
+                "trade_plan": {
+                    "target_date": "2026-07-10",
+                    "stale": True,
+                    "document": {
+                        "title": "旧交易预案",
+                        "summary": "沿用前次风险边界。",
+                        "document_path": "documents/old-plan.html",
+                    },
+                },
+                "research_pool": {"target_date": "", "stale": False, "document": None, "candidates": []},
+            },
+        }
+
+        index_html = site.render_home(data)
+
+        self.assertIn("2026-07-10", index_html)
+        self.assertIn("可能过期", index_html)
+        self.assertIn('href="documents/old-plan.html"', index_html)
 
     def test_story_order_keeps_current_first_and_closed_most_recent_first(self) -> None:
         trades = [
