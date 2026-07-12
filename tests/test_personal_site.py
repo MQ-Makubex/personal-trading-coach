@@ -295,6 +295,34 @@ class WorkbenchArtifactTest(unittest.TestCase):
         self.assertEqual(rows[0]["stock_name"], "候选1")
         self.assertEqual(rows[-1]["buy_point"], "20日线回踩")
 
+    def test_research_pool_parser_accepts_combined_stock_column(self) -> None:
+        markdown = (
+            "| 序 | 股票 | 篮子/题材 | 买点类型 |\n"
+            "| ---: | --- | --- | --- |\n"
+            "| 1 | 300260 新莱应材 | 持仓风险 | 风险修复观察 |\n"
+            "| 2 | 603259 药明康德 | 医疗研发外包 | 强轮动回踩 |\n"
+        )
+
+        rows = site.extract_research_pool_candidates(markdown)
+
+        self.assertEqual(
+            rows,
+            [
+                {
+                    "stock_code": "300260",
+                    "stock_name": "新莱应材",
+                    "theme": "持仓风险",
+                    "buy_point": "风险修复观察",
+                },
+                {
+                    "stock_code": "603259",
+                    "stock_name": "药明康德",
+                    "theme": "医疗研发外包",
+                    "buy_point": "强轮动回踩",
+                },
+            ],
+        )
+
     def test_short_pool_stays_short_instead_of_inventing_candidates(self) -> None:
         markdown = "| 代码 | 名称 | 题材 | 买点 |\n| --- | --- | --- | --- |\n| 300001 | 候选1 | 先进封装 | 20日线 |"
 
@@ -631,6 +659,8 @@ class SiteGenerationTests(unittest.TestCase):
         self.assertIn('id="ledgerData"', ledger_html)
         self.assertIn("data-current-account-facts", ledger_html)
         self.assertLess(ledger_html.index("data-current-account-facts"), ledger_html.index("data-ledger-app"))
+        self.assertIn('data-ledger-prev aria-label="上一周期" title="上一周期"', ledger_html)
+        self.assertIn('data-ledger-next aria-label="下一周期" title="下一周期"', ledger_html)
         for grain in ("all", "day", "week", "month", "year", "custom"):
             self.assertIn(f'data-ledger-grain="{grain}"', ledger_html)
         for target in (

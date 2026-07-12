@@ -84,7 +84,9 @@ const results = {
   mobile: await inspect('mobile', {width: 390, height: 844})
 };
 await browser.close();
-console.log(JSON.stringify(results, null, 2));
+const reportJson = JSON.stringify(results, null, 2);
+fs.writeFileSync(path.join(outputDir, 'report.json'), `${reportJson}\n`);
+console.log(reportJson);
 const failures = Object.entries(results).flatMap(([viewport, report]) =>
   Object.entries(report).filter(([, value]) => value !== true && value !== 15).map(([key]) => `${viewport}.${key}`)
 );

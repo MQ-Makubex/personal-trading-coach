@@ -76,7 +76,8 @@ MARKET_CODE_PATTERN = re.compile(
 POOL_COLUMNS = {
     "stock_code": {"代码", "证券代码", "股票代码"},
     "stock_name": {"名称", "证券名称", "股票名称"},
-    "theme": {"题材", "题材篮子", "产业方向", "方向"},
+    "stock_identity": {"股票"},
+    "theme": {"题材", "题材篮子", "篮子/题材", "产业方向", "方向"},
     "buy_point": {"买点", "买点类型", "触发", "触发条件"},
 }
 
@@ -263,13 +264,28 @@ def pool_column_indices(row: list[str]) -> dict[str, int] | None:
     columns: dict[str, int | None] = {}
     for field, aliases in POOL_COLUMNS.items():
         columns[field] = next((index for index, cell in enumerate(row) if cell in aliases), None)
-    if columns["stock_code"] is None or columns["stock_name"] is None:
+    has_separate_identity = columns["stock_code"] is not None and columns["stock_name"] is not None
+    if not has_separate_identity and columns["stock_identity"] is None:
         return None
     return {field: index for field, index in columns.items() if index is not None}
 
 
 def is_table_separator(row: list[str]) -> bool:
     return bool(row) and all(re.fullmatch(r":?-{3,}:?", cell) for cell in row)
+
+
+def parse_pool_identity(row: list[str], columns: dict[str, int]) -> tuple[str, str] | None:
+    code_index = columns.get("stock_code")
+    name_index = columns.get("stock_name")
+    if code_index is not None and name_index is not None:
+        return row[code_index], row[name_index]
+    identity_index = columns.get("stock_identity")
+    if identity_index is None:
+        return None
+    match = re.fullmatch(r"(\d{6})\s+(.+)", row[identity_index])
+    if not match:
+        return None
+    return match.group(1), match.group(2).strip()
 
 
 def extract_research_pool_candidates(markdown_text: str) -> list[dict[str, str]]:
@@ -293,16 +309,20 @@ def extract_research_pool_candidates(markdown_text: str) -> list[dict[str, str]]
                 continue
             if len(row) <= required_width:
                 break
-            code = row[columns["stock_code"]]
-            name = row[columns["stock_name"]]
+            identity = parse_pool_identity(row, columns)
+            if identity is None:
+                break
+            code, name = identity
             if not re.fullmatch(r"\d{6}", code) or not name:
                 break
+            theme_index = columns.get("theme")
+            buy_point_index = columns.get("buy_point")
             output.append(
                 {
                     "stock_code": code,
                     "stock_name": name,
-                    "theme": row[columns["theme"]] if columns["theme"] is not None else "待核验",
-                    "buy_point": row[columns["buy_point"]] if columns["buy_point"] is not None else "待核验",
+                    "theme": row[theme_index] if theme_index is not None else "待核验",
+                    "buy_point": row[buy_point_index] if buy_point_index is not None else "待核验",
                 }
             )
             row_index += 1
@@ -1321,9 +1341,9 @@ def render_ledger(data: dict[str, Any]) -> str:
           <button type="button" data-ledger-grain="custom" aria-pressed="false">自定义</button>
         </div>
         <nav class="pagination period-navigation" aria-label="周期导航">
-          <button type="button" data-ledger-prev aria-label="上一周期">←</button>
+          <button type="button" data-ledger-prev aria-label="上一周期" title="上一周期">←</button>
           <strong data-ledger-period-label>全部历史</strong>
-          <button type="button" data-ledger-next aria-label="下一周期">→</button>
+          <button type="button" data-ledger-next aria-label="下一周期" title="下一周期">→</button>
         </nav>
         <div class="filter-row custom-range" data-ledger-custom hidden>
           <label class="field" for="ledgerFrom"><span>开始日期</span><input id="ledgerFrom" type="date" min="{esc(bounds['minimum'])}" max="{esc(bounds['maximum'])}"></label>
