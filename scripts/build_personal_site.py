@@ -4,18 +4,29 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import html
 import json
 import re
 import sqlite3
 from collections import Counter, defaultdict
-from datetime import datetime
+from dataclasses import asdict
+from datetime import date, datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
-from ledger_analytics import fifo_analytics, number
+from ledger_analytics import (
+    broker_like_cycles,
+    display_names_by_code,
+    fifo_analytics,
+    load_cash_adjustments,
+    load_trades,
+    number,
+)
+from personal_site_metrics import summarize_cycles
+from personal_site_state import load_discipline_feed, load_trading_modes
 from render_markdown import render_markdown
 
 
@@ -59,6 +70,13 @@ NAV_ITEMS = (
 MARKET_CODE_PATTERN = re.compile(
     r"(?<!\d)((?:000|001|002|003|159|300|301|500|501|502|506|510|511|512|513|515|516|517|518|520|560|561|562|563|588|600|601|603|605|688)\d{3})(?!\d)"
 )
+
+POOL_COLUMNS = {
+    "stock_code": {"代码", "证券代码", "股票代码"},
+    "stock_name": {"名称", "证券名称", "股票名称"},
+    "theme": {"题材", "题材篮子", "产业方向", "方向"},
+    "buy_point": {"买点", "买点类型", "触发", "触发条件"},
+}
 
 
 def esc(value: Any) -> str:
@@ -150,6 +168,87 @@ def infer_date(path: Path) -> str:
     return expanded.group(0) if expanded else ""
 
 
+def infer_document_target_date(title: str, markdown_text: str, fallback_date: str) -> str:
+    normalized = markdown_text[:4000]
+    labeled = re.search(
+        r"(?:目标交易日|交易日期|适用日期)\s*[：:]?\s*(20\d{2})[-年/](\d{1,2})[-月/](\d{1,2})日?",
+        normalized,
+    )
+    if labeled:
+        year, month, day = (int(value) for value in labeled.groups())
+        return date(year, month, day).isoformat()
+    for source in (title, normalized[:800]):
+        expanded = re.search(r"(20\d{2})[-年/](\d{1,2})[-月/](\d{1,2})日?", source)
+        if expanded:
+            year, month, day = (int(value) for value in expanded.groups())
+            return date(year, month, day).isoformat()
+        compact = re.search(r"(?<!\d)(20\d{6})(?!\d)", source)
+        if compact:
+            value = compact.group(1)
+            return date(int(value[:4]), int(value[4:6]), int(value[6:])).isoformat()
+    return fallback_date
+
+
+def resolve_workbench_target_date(documents: list[dict[str, Any]], as_of_date: date) -> str:
+    explicit = [
+        date.fromisoformat(str(item["target_date"]))
+        for item in documents
+        if item.get("category") in {"trade_plan", "research_pool"} and item.get("target_date")
+    ]
+    return max([as_of_date, *explicit]).isoformat()
+
+
+def select_daily_document(
+    documents: list[dict[str, Any]], category: str, target_date: str
+) -> dict[str, Any]:
+    candidates = [item for item in documents if item.get("category") == category and item.get("target_date")]
+    exact = next((item for item in candidates if item.get("target_date") == target_date), None)
+    selected = exact or max(
+        candidates,
+        key=lambda item: (str(item.get("target_date") or ""), str(item.get("date") or ""), str(item.get("mtime") or "")),
+        default=None,
+    )
+    return {
+        "document": selected,
+        "target_date": str((selected or {}).get("target_date") or ""),
+        "stale": bool(selected and selected.get("target_date") != target_date),
+    }
+
+
+def extract_research_pool_candidates(markdown_text: str) -> list[dict[str, str]]:
+    parsed: list[list[str]] = []
+    for raw_line in markdown_text.splitlines():
+        if raw_line.count("|") < 2:
+            continue
+        row = next(csv.reader([raw_line.strip().strip("|")], delimiter="|"))
+        parsed.append([cell.strip() for cell in row])
+    for header_index, header in enumerate(parsed):
+        columns: dict[str, int | None] = {}
+        for field, aliases in POOL_COLUMNS.items():
+            columns[field] = next((index for index, cell in enumerate(header) if cell in aliases), None)
+        if columns["stock_code"] is None or columns["stock_name"] is None:
+            continue
+        output: list[dict[str, str]] = []
+        required_width = max(index for index in columns.values() if index is not None)
+        for row in parsed[header_index + 1 :]:
+            if len(row) <= required_width:
+                continue
+            code = row[columns["stock_code"]]
+            name = row[columns["stock_name"]]
+            if not re.fullmatch(r"\d{6}", code) or not name:
+                continue
+            output.append(
+                {
+                    "stock_code": code,
+                    "stock_name": name,
+                    "theme": row[columns["theme"]] if columns["theme"] is not None else "待核验",
+                    "buy_point": row[columns["buy_point"]] if columns["buy_point"] is not None else "待核验",
+                }
+            )
+        return output
+    return []
+
+
 def title_from_markdown(path: Path) -> str:
     for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
         if line.startswith("# "):
@@ -211,12 +310,14 @@ def collect_timeline_documents(reports_dir: Path, output_dir: Path) -> list[dict
         rel = path.relative_to(reports_dir)
         stat = path.stat()
         codes = sorted(set(MARKET_CODE_PATTERN.findall(markdown_text)))
+        artifact_date = infer_date(rel)
         documents.append(
             {
                 "title": title,
                 "category": category,
                 "category_label": REPORT_LABELS[category],
-                "date": infer_date(rel),
+                "date": artifact_date,
+                "target_date": infer_document_target_date(title, markdown_text, artifact_date),
                 "source_path": str(rel).replace("\\", "/"),
                 "document_path": f"documents/{document_slug(rel)}",
                 "mtime": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
@@ -443,6 +544,7 @@ def build_data(
     reports_dir: Path,
     output_dir: Path,
     state_dir: Path = DEFAULT_STATE,
+    as_of_date: date | None = None,
 ) -> dict[str, Any]:
     conn = connect(sqlite_path)
     analytics = fifo_analytics(conn)
@@ -484,9 +586,30 @@ def build_data(
         limit 20
         """,
     )
+    canonical_trades = load_trades(conn)
+    cash_adjustments = load_cash_adjustments(conn)
+    display_names = display_names_by_code(canonical_trades, cash_adjustments)
+    cycles = broker_like_cycles(canonical_trades, display_names)
+    ability = summarize_cycles(cycles)
     conn.close()
 
     documents = collect_timeline_documents(reports_dir, output_dir)
+    trading_state = load_trading_modes(state_dir / "trading_modes.json", {row["cycle_id"]: row for row in cycles})
+    discipline_feed = load_discipline_feed(state_dir / "discipline_feed.json")
+    target_date = resolve_workbench_target_date(documents, as_of_date or datetime.now().date())
+    selected_plan = select_daily_document(documents, "trade_plan", target_date)
+    selected_pool = select_daily_document(documents, "research_pool", target_date)
+    pool_document = selected_pool["document"]
+    selected_pool["candidates"] = extract_research_pool_candidates(str((pool_document or {}).get("markdown") or ""))
+    ledger_dataset = {
+        "bounds": {
+            "minimum": str(summary.get("first_trade_date") or ""),
+            "maximum": str(summary.get("latest_trade_date") or ""),
+        },
+        "cycles": cycles,
+        "trades": trades,
+        "adjustments": [asdict(row) for row in cash_adjustments],
+    }
     positions = analytics["open_positions"]
     realized_rows = analytics["broker_like_realized_by_stock"]
     all_time_realized = round(
@@ -525,6 +648,16 @@ def build_data(
         "documents": documents,
         "document_counts": dict(Counter(item["category"] for item in documents)),
         "latest_by_category": latest_by_category,
+        "cycles": cycles,
+        "ability": ability,
+        "ledger_dataset": ledger_dataset,
+        "trading_state": trading_state,
+        "discipline_feed": discipline_feed,
+        "workbench": {
+            "target_date": target_date,
+            "trade_plan": selected_plan,
+            "research_pool": selected_pool,
+        },
         "stories": stories,
         "states": states,
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -868,6 +1001,12 @@ def public_site_data(data: dict[str, Any]) -> dict[str, Any]:
         "open_positions": data["open_positions"],
         "documents": documents,
         "stories": stories,
+        "cycles": data["cycles"],
+        "ability": data["ability"],
+        "ledger_dataset": data["ledger_dataset"],
+        "trading_state": data["trading_state"],
+        "discipline_feed": data["discipline_feed"],
+        "workbench": data["workbench"],
         "generated_at": data["generated_at"],
     }
 
@@ -877,6 +1016,7 @@ def write_site(
     reports_dir: Path = DEFAULT_REPORTS,
     output_dir: Path = DEFAULT_OUTPUT,
     state_dir: Path = DEFAULT_STATE,
+    as_of_date: date | None = None,
 ) -> dict[str, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     assets_dir = output_dir / "assets"
@@ -885,7 +1025,7 @@ def write_site(
     for directory in (assets_dir, documents_dir, stocks_dir):
         directory.mkdir(parents=True, exist_ok=True)
 
-    data = build_data(sqlite_path, reports_dir, output_dir, state_dir)
+    data = build_data(sqlite_path, reports_dir, output_dir, state_dir, as_of_date)
     (assets_dir / "site.css").write_text((ASSET_SOURCE / "site.css").read_text(encoding="utf-8"), encoding="utf-8")
     (assets_dir / "site.js").write_text((ASSET_SOURCE / "site.js").read_text(encoding="utf-8"), encoding="utf-8")
 

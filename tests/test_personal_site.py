@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 
 
@@ -123,6 +124,67 @@ class TimelineIndexTests(unittest.TestCase):
         self.assertEqual(quotes["300260"]["source"], "run_20260710_review/market_snapshot.md")
 
 
+class WorkbenchArtifactTest(unittest.TestCase):
+    def test_explicit_target_date_beats_run_directory_date(self) -> None:
+        markdown = "# 2026-07-13 明日交易预案\n\n目标交易日：2026-07-13\n"
+
+        result = site.infer_document_target_date("2026-07-13 明日交易预案", markdown, "2026-07-11")
+
+        self.assertEqual(result, "2026-07-13")
+
+    def test_title_then_content_then_artifact_date_supply_target_date(self) -> None:
+        self.assertEqual(site.infer_document_target_date("2026/7/13 明日预案", "", "2026-07-11"), "2026-07-13")
+        self.assertEqual(site.infer_document_target_date("明日预案", "适用日期 2026年7月14日", "2026-07-11"), "2026-07-14")
+        self.assertEqual(site.infer_document_target_date("明日预案", "无日期", "2026-07-11"), "2026-07-11")
+
+    def test_missing_target_document_falls_back_and_marks_stale(self) -> None:
+        documents = [
+            {
+                "category": "trade_plan",
+                "target_date": "2026-07-10",
+                "date": "2026-07-10",
+                "mtime": "2026-07-10 18:00",
+                "title": "旧预案",
+                "document_path": "documents/old-plan.html",
+            }
+        ]
+
+        selected = site.select_daily_document(documents, "trade_plan", "2026-07-11")
+
+        self.assertEqual(selected["document"]["title"], "旧预案")
+        self.assertTrue(selected["stale"])
+        self.assertEqual(selected["target_date"], "2026-07-10")
+        self.assertEqual(selected["document"]["document_path"], "documents/old-plan.html")
+
+    def test_fallback_uses_latest_valid_document_not_input_order(self) -> None:
+        documents = [
+            {"category": "research_pool", "target_date": "2026-07-09", "date": "2026-07-11", "mtime": "2026-07-11 20:00"},
+            {"category": "research_pool", "target_date": "2026-07-10", "date": "2026-07-10", "mtime": "2026-07-10 18:00"},
+        ]
+
+        selected = site.select_daily_document(documents, "research_pool", "2026-07-11")
+
+        self.assertEqual(selected["target_date"], "2026-07-10")
+
+    def test_research_pool_parser_returns_all_fifteen_rows(self) -> None:
+        body = "\n".join(
+            f"| {index} | {300000 + index:06d} | 候选{index} | 先进封装 | 20日线回踩 |"
+            for index in range(1, 16)
+        )
+        markdown = "| 序号 | 证券代码 | 证券名称 | 题材篮子 | 买点类型 |\n| --- | --- | --- | --- | --- |\n" + body
+
+        rows = site.extract_research_pool_candidates(markdown)
+
+        self.assertEqual(len(rows), 15)
+        self.assertEqual(rows[0]["stock_name"], "候选1")
+        self.assertEqual(rows[-1]["buy_point"], "20日线回踩")
+
+    def test_short_pool_stays_short_instead_of_inventing_candidates(self) -> None:
+        markdown = "| 代码 | 名称 | 题材 | 买点 |\n| --- | --- | --- | --- |\n| 300001 | 候选1 | 先进封装 | 20日线 |"
+
+        self.assertEqual(len(site.extract_research_pool_candidates(markdown)), 1)
+
+
 class SiteGenerationTests(unittest.TestCase):
     def test_write_site_generates_multiple_pages_and_unified_markdown_details(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -147,7 +209,14 @@ class SiteGenerationTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (run / "research_pool.md").write_text(
-                "# 明日研究股票池\n\n688037 仅为候选，不存在底账故事页。\n",
+                "# 2026-07-11 明日研究股票池\n\n"
+                "| 代码 | 名称 | 题材 | 买点 |\n| --- | --- | --- | --- |\n"
+                "| 688037 | 芯源微 | 先进封装 | 20日线回踩 |\n\n"
+                "688037 仅为候选，不存在底账故事页。\n",
+                encoding="utf-8",
+            )
+            (run / "trade_plan.md").write_text(
+                "# 2026-07-11 明日交易预案\n\n目标交易日：2026-07-11\n",
                 encoding="utf-8",
             )
             (run / "xueqiu_post.md").write_text("# 雪球复盘草稿\n\n个人复盘。\n", encoding="utf-8")
@@ -162,7 +231,7 @@ class SiteGenerationTests(unittest.TestCase):
             ):
                 (state / filename).write_text(f"# {filename}\n\n本地状态。\n", encoding="utf-8")
 
-            written = site.write_site(sqlite_path, reports, output, state_dir=state)
+            written = site.write_site(sqlite_path, reports, output, state_dir=state, as_of_date=date(2026, 7, 11))
 
             expected_pages = {"index", "timeline", "stories", "ledger", "rules", "data"}
             self.assertTrue(expected_pages.issubset(written))
@@ -214,6 +283,17 @@ class SiteGenerationTests(unittest.TestCase):
         self.assertEqual(data["mark_to_market"]["realized_pnl"], 197.00)
         self.assertEqual(data["mark_to_market"]["unrealized_pnl"], 119.00)
         self.assertEqual(data["mark_to_market"]["total_pnl"], 316.00)
+        self.assertEqual(data["workbench"]["target_date"], "2026-07-11")
+        self.assertFalse(data["workbench"]["trade_plan"]["stale"])
+        self.assertEqual(len(data["workbench"]["research_pool"]["candidates"]), 1)
+        self.assertEqual(data["workbench"]["research_pool"]["candidates"][0]["stock_code"], "688037")
+        self.assertEqual(data["ability"]["closed_cycles"], 1)
+        self.assertEqual(len(data["cycles"]), 2)
+        self.assertEqual(data["ledger_dataset"]["bounds"], {"minimum": "2026-07-08", "maximum": "2026-07-10"})
+        self.assertEqual(len(data["ledger_dataset"]["cycles"]), 2)
+        self.assertIn("modes", data["trading_state"])
+        self.assertIn("messages", data["discipline_feed"])
+        self.assertNotIn(str(root), json.dumps(data, ensure_ascii=False))
 
     def test_story_order_keeps_current_first_and_closed_most_recent_first(self) -> None:
         trades = [
