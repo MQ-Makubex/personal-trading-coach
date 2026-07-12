@@ -542,10 +542,19 @@ class SiteGenerationTests(unittest.TestCase):
         self.assertEqual(coach_html.count("<h1>"), 1)
         self.assertEqual(rules_html.count("<h1>"), 1)
         self.assertNotIn("coach_note.html", timeline_html)
-        self.assertIn('<span>当前数量</span><strong class="mono">60</strong>', current_stock_html)
-        self.assertIn('<span>券商式持仓成本</span><strong class="mono">¥10.02</strong>', current_stock_html)
-        self.assertIn("已清仓，不再计算持仓成本", closed_stock_html)
-        self.assertNotIn("行情截至 待核验", closed_stock_html)
+        self.assertIn('<header class="stock-lifetime">', current_stock_html)
+        self.assertIn('class="stock-cycle-layout" data-stock-cycles', current_stock_html)
+        self.assertIn('data-cycle-option="', current_stock_html)
+        self.assertIn('<dt>当前数量</dt><dd class="mono">60</dd>', current_stock_html)
+        self.assertIn('<dt>当前成本</dt><dd class="mono">¥10.02</dd>', current_stock_html)
+        self.assertIn('<dt>最新价格</dt><dd class="mono">¥12.00</dd>', current_stock_html)
+        self.assertIn('<dt>浮动盈亏</dt><dd class="mono gain">¥119.00</dd>', current_stock_html)
+        self.assertIn('<dt>最终平仓</dt><dd class="mono">进行中</dd>', current_stock_html)
+        self.assertIn('<dt>最终平仓</dt><dd class="mono">2026-07-09</dd>', closed_stock_html)
+        self.assertIn('<dt>持股自然日</dt><dd class="mono">1</dd>', closed_stock_html)
+        self.assertIn('<dt>总买入成本</dt><dd class="mono">¥1,001.00</dd>', closed_stock_html)
+        self.assertIn('<dt>净卖出收入</dt><dd class="mono">¥1,198.00</dd>', closed_stock_html)
+        self.assertNotIn("成交生命周期", current_stock_html)
         self.assertNotIn('href="../stocks/300001.html"', pool_html)
         self.assertIn('<span class="inline-code mono">300001</span>', pool_html)
         self.assertEqual(data["mark_to_market"]["realized_pnl"], 197.00)
@@ -624,16 +633,128 @@ class SiteGenerationTests(unittest.TestCase):
         self.assertIn('href="documents/old-plan.html"', index_html)
 
     def test_story_order_keeps_current_first_and_closed_most_recent_first(self) -> None:
-        trades = [
-            {"stock_code": "000001", "stock_name": "旧故事", "trade_date": "2026-01-01", "trade_time": "10:00"},
-            {"stock_code": "000002", "stock_name": "新故事", "trade_date": "2026-07-01", "trade_time": "10:00"},
-            {"stock_code": "300260", "stock_name": "当前持仓", "trade_date": "2026-06-01", "trade_time": "10:00"},
-        ]
-        positions = [{"stock_code": "300260", "stock_name": "当前持仓", "open_quantity": 1, "broker_like_cost_basis_after_fees": 10}]
+        def cycle(cycle_id: str, code: str, first_buy: str, close_date: str = "", holding_days: int | None = None) -> dict[str, object]:
+            status = "closed" if close_date else "open"
+            return {
+                "cycle_id": cycle_id,
+                "status": status,
+                "stock_code": code,
+                "stock_name": "周期样本" if code == "300260" else f"故事{code}",
+                "first_buy_date": first_buy,
+                "first_buy_time": "09:30:00",
+                "last_buy_date": first_buy,
+                "last_buy_time": "10:00:00",
+                "close_date": close_date,
+                "close_time": "14:50:00" if close_date else "",
+                "holding_days": holding_days,
+                "buy_quantity": 100,
+                "sell_quantity": 100 if close_date else 0,
+                "open_quantity": 0 if close_date else 100,
+                "buy_cost_after_fees": 1001,
+                "sell_proceeds_after_fees": 1098 if close_date else 0,
+                "rolling_cost_basis_after_fees": 0 if close_date else 1001,
+                "realized_pnl_after_fees": 97 if close_date else None,
+                "return_pct": 9.69 if close_date else None,
+                "events": [
+                    {
+                        "trade_date": first_buy,
+                        "trade_time": "09:30:00",
+                        "side": "BUY",
+                        "quantity": 100,
+                        "price": 10,
+                        "amount": 1000,
+                        "net_amount": -1001,
+                        "fees": 1,
+                    }
+                ],
+            }
 
-        stories = site.build_stories(trades, positions, [], {}, [], "")
+        cycles = [
+            cycle("closed-old", "300260", "2026-01-01", "2026-01-03", 2),
+            cycle("open-cycle", "300260", "2026-07-01"),
+            cycle("closed-new", "300260", "2026-06-01", "2026-06-05", 4),
+            cycle("closed-only-old", "000002", "2026-03-01", "2026-03-02", 1),
+            cycle("closed-only-new", "000002", "2026-05-01", "2026-05-03", 2),
+            cycle("older-stock", "000001", "2026-02-01", "2026-02-02", 1),
+        ]
+        positions = [
+            {
+                "stock_code": "300260",
+                "stock_name": "周期样本",
+                "open_quantity": 100,
+                "broker_like_cost_basis_after_fees": 1001,
+            }
+        ]
+        realized_rows = [
+            {"stock_code": "300260", "stock_name": "周期样本", "broker_like_total_pnl_after_fees": 194},
+            {"stock_code": "000002", "stock_name": "故事000002", "broker_like_total_pnl_after_fees": 194},
+            {"stock_code": "000001", "stock_name": "故事000001", "broker_like_total_pnl_after_fees": 97},
+        ]
+        quotes = {"300260": {"price": 12, "date": "2026-07-12", "source": "run/market_snapshot.md"}}
+        documents = [
+            {
+                "title": "周期证据",
+                "category_label": "教练手记",
+                "date": "2026-06-03",
+                "target_date": "2026-06-03",
+                "document_path": "documents/cycle-evidence.html",
+                "stock_codes": ["300260"],
+                "search_text": "周期样本",
+                "summary": "周期内证据。",
+            },
+            {
+                "title": "周期外证据",
+                "category_label": "教练手记",
+                "date": "2025-12-31",
+                "target_date": "2025-12-31",
+                "document_path": "documents/outside.html",
+                "stock_codes": ["300260"],
+                "search_text": "周期样本",
+                "summary": "周期外证据。",
+            },
+        ]
+        trading_state = {
+            "modes": [
+                {
+                    "id": "mode-a",
+                    "name": "模式 A",
+                    "samples": [
+                        {
+                            "cycle_id": "closed-new",
+                            "execution_result": "planned",
+                            "evidence_direction": "support",
+                            "evidence_type": "formal",
+                            "note": "按计划执行",
+                            "source_paths": ["reports/run/coach_note.md"],
+                        }
+                    ],
+                }
+            ]
+        }
+
+        stories = site.build_stories(cycles, positions, realized_rows, quotes, documents, trading_state, "")
 
         self.assertEqual([story["stock_code"] for story in stories], ["300260", "000002", "000001"])
+        story = stories[0]
+        self.assertEqual(story["lifetime"]["closed_cycles"], 2)
+        self.assertEqual(story["lifetime"]["average_holding_days"], 3.0)
+        self.assertEqual(story["default_cycle_id"], "open-cycle")
+        self.assertEqual([row["cycle_id"] for row in story["cycles"]], ["open-cycle", "closed-new", "closed-old"])
+        self.assertEqual(story["cycles"][1]["linked_modes"][0]["id"], "mode-a")
+        self.assertEqual([item["title"] for item in story["cycles"][1]["linked_documents"]], ["周期证据"])
+        self.assertEqual(stories[1]["default_cycle_id"], "closed-only-new")
+
+        stock_html = site.render_stock(story, "2026-07-12 12:00:00")
+        self.assertIn('<header class="stock-lifetime">', stock_html)
+        self.assertIn('class="stock-cycle-layout" data-stock-cycles data-default-cycle="open-cycle"', stock_html)
+        self.assertIn('data-cycle-option="open-cycle"', stock_html)
+        self.assertEqual(stock_html.count('data-cycle-panel="'), 3)
+        self.assertEqual(stock_html.count('class="cycle-detail" data-cycle-panel="open-cycle"'), 1)
+        self.assertIn('data-cycle-panel="closed-new" hidden', stock_html)
+        for label in ("持股自然日", "财务结果", "周期盈亏", "执行结果", "证据方向", "成交事件", "关联训练记录"):
+            self.assertIn(label, stock_html)
+        self.assertIn('href="#mode-mode-a"', stock_html)
+        self.assertIn('href="../documents/cycle-evidence.html"', stock_html)
 
 
 class SummaryContractTests(unittest.TestCase):

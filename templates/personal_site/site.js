@@ -229,6 +229,40 @@
     render();
   }
 
+  function initStockCycles() {
+    const root = document.querySelector('[data-stock-cycles]');
+    if (!root) return;
+    const buttons = Array.from(root.querySelectorAll('[data-cycle-option]'));
+    const panels = Array.from(root.querySelectorAll('[data-cycle-panel]'));
+    const available = new Set(buttons.map(button => button.dataset.cycleOption));
+    let selected = params.get('cycle') || root.dataset.defaultCycle;
+    if (!available.has(selected)) selected = root.dataset.defaultCycle;
+
+    function render(push = false) {
+      buttons.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.cycleOption === selected)));
+      panels.forEach(panel => { panel.hidden = panel.dataset.cyclePanel !== selected; });
+      const next = new URLSearchParams(location.search);
+      next.set('cycle', selected);
+      const url = `${location.pathname}?${next.toString()}`;
+      try {
+        history[push ? 'pushState' : 'replaceState'](null, '', url);
+      } catch (_) {
+        return;
+      }
+    }
+
+    buttons.forEach(button => button.addEventListener('click', () => {
+      selected = button.dataset.cycleOption;
+      render(true);
+    }));
+    window.addEventListener('popstate', () => {
+      const candidate = new URLSearchParams(location.search).get('cycle');
+      selected = available.has(candidate) ? candidate : root.dataset.defaultCycle;
+      render(false);
+    });
+    render(false);
+  }
+
   document.addEventListener('keydown', event => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
       const input = document.querySelector('#globalSearch');
@@ -244,4 +278,5 @@
   initLedger();
   initPnlTable();
   initRules();
+  initStockCycles();
 })();

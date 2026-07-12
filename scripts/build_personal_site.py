@@ -521,31 +521,49 @@ def _storyline_excerpt(markdown_text: str, code: str, name: str) -> str:
 
 
 def build_stories(
-    trades: list[dict[str, Any]],
+    cycles: list[dict[str, Any]],
     positions: list[dict[str, Any]],
     realized_rows: list[dict[str, Any]],
     quotes: dict[str, dict[str, Any]],
     documents: list[dict[str, Any]],
+    trading_state: dict[str, Any],
     storyline_markdown: str,
 ) -> list[dict[str, Any]]:
-    trades_by_code: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    cycles_by_code: dict[str, list[dict[str, Any]]] = defaultdict(list)
     names: dict[str, str] = {}
-    for trade in trades:
-        code = str(trade.get("stock_code") or "")
+    for cycle in cycles:
+        code = str(cycle.get("stock_code") or "")
         if not re.fullmatch(r"\d{6}", code):
             continue
-        trades_by_code[code].append(trade)
-        names[code] = str(trade.get("stock_name") or names.get(code, ""))
+        cycles_by_code[code].append(cycle)
+        names[code] = str(cycle.get("stock_name") or names.get(code, ""))
     position_map = {str(row.get("stock_code") or ""): row for row in positions}
     realized_map = {str(row.get("stock_code") or ""): row for row in realized_rows}
-    codes = sorted(set(trades_by_code) | set(position_map) | set(realized_map))
+    modes_by_cycle: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for mode in trading_state.get("modes", []):
+        for sample in mode.get("samples", []):
+            cycle_id = str(sample.get("cycle_id") or "")
+            if not cycle_id:
+                continue
+            modes_by_cycle[cycle_id].append(
+                {
+                    "id": mode.get("id"),
+                    "name": mode.get("name"),
+                    "status": mode.get("status"),
+                    "version": mode.get("version"),
+                    "sample": sample,
+                }
+            )
+    codes = sorted(set(cycles_by_code) | set(position_map) | set(realized_map))
     stories: list[dict[str, Any]] = []
     for code in codes:
-        stock_trades = sorted(
-            trades_by_code.get(code, []),
-            key=lambda row: (str(row.get("trade_date") or ""), str(row.get("trade_time") or "")),
+        stock_cycles = cycles_by_code.get(code, [])
+        ordered_cycles = sorted(
+            stock_cycles,
+            key=lambda row: (str(row.get("close_date") or ""), str(row.get("close_time") or "")),
             reverse=True,
         )
+        ordered_cycles.sort(key=lambda row: row.get("status") != "open")
         position = position_map.get(code)
         realized = realized_map.get(code, {})
         name = str((position or {}).get("stock_name") or realized.get("stock_name") or names.get(code, ""))
@@ -561,13 +579,48 @@ def build_stories(
         )
         unrealized_pnl = quantity * number((quote or {}).get("price")) - cost_basis if position and quote else None
         total_pnl = realized_pnl + unrealized_pnl if unrealized_pnl is not None else (realized_pnl if not position else None)
-        linked_documents = [
-            item
-            for item in documents
-            if code in item.get("stock_codes", []) or (name and name in str(item.get("search_text") or ""))
-        ]
-        first_date = min((str(row.get("trade_date") or "") for row in stock_trades), default="")
-        latest_date = max((str(row.get("trade_date") or "") for row in stock_trades), default="")
+        as_of_date = valid_iso_date(trading_state.get("as_of_date")) or valid_iso_date((quote or {}).get("date"))
+        story_cycles: list[dict[str, Any]] = []
+        for source_cycle in ordered_cycles:
+            cycle = dict(source_cycle)
+            first_buy_date = valid_iso_date(cycle.get("first_buy_date"))
+            end_date = valid_iso_date(cycle.get("close_date")) or as_of_date
+            linked_documents = []
+            for item in documents:
+                references_stock = code in item.get("stock_codes", []) or (
+                    name and name in str(item.get("search_text") or "")
+                )
+                document_date = valid_iso_date(item.get("target_date")) or valid_iso_date(item.get("date"))
+                if references_stock and first_buy_date and end_date and first_buy_date <= document_date <= end_date:
+                    linked_documents.append(item)
+            cycle["linked_documents"] = linked_documents
+            cycle["linked_modes"] = modes_by_cycle.get(str(cycle.get("cycle_id") or ""), [])
+            if cycle.get("status") == "open":
+                cycle.update(
+                    {
+                        "current_quantity": round(quantity, 2),
+                        "current_cost": round(cost_basis / quantity, 2) if position and quantity else None,
+                        "average_cost": round(cost_basis / quantity, 2) if position and quantity else None,
+                        "latest_price": quote.get("price") if quote else None,
+                        "quote_date": quote.get("date") if quote else None,
+                        "unrealized_pnl": round(unrealized_pnl, 2) if unrealized_pnl is not None else None,
+                    }
+                )
+            story_cycles.append(cycle)
+        first_date = min((str(row.get("first_buy_date") or "") for row in stock_cycles), default="")
+        latest_date = max(
+            (str(row.get("close_date") or row.get("last_buy_date") or row.get("first_buy_date") or "") for row in stock_cycles),
+            default="",
+        )
+        event_count = sum(len(row.get("events", [])) for row in stock_cycles)
+        lifetime = summarize_cycles(stock_cycles)
+        lifetime.update(
+            {
+                "realized_pnl": round(realized_pnl, 2),
+                "unrealized_pnl": round(unrealized_pnl, 2) if unrealized_pnl is not None else None,
+                "total_pnl": round(total_pnl, 2) if total_pnl is not None else None,
+            }
+        )
         excerpt = _storyline_excerpt(storyline_markdown, code, name)
         stories.append(
             {
@@ -585,10 +638,10 @@ def build_stories(
                 "total_pnl": round(total_pnl, 2) if total_pnl is not None else None,
                 "first_trade_date": first_date,
                 "latest_trade_date": latest_date,
-                "trade_count": len(stock_trades),
-                "trades": stock_trades,
-                "documents": linked_documents[:30],
-                "document_count": len(linked_documents),
+                "trade_count": event_count,
+                "lifetime": lifetime,
+                "cycles": story_cycles,
+                "default_cycle_id": str(story_cycles[0].get("cycle_id") or "") if story_cycles else "",
                 "storyline_markdown": excerpt,
                 "storyline_review_status": "待人工审核" if excerpt and "待人工审核" in storyline_markdown else "账本事实",
                 "page_path": f"stocks/{code}.html",
@@ -691,7 +744,8 @@ def build_data(
     states = load_state_documents(state_dir)
     storyline_state = next((item for item in states if item["key"] == "position_storylines"), None)
     storyline_markdown = str((storyline_state or {}).get("markdown") or "")
-    stories = build_stories(trades, enriched_positions, realized_rows, quotes, documents, storyline_markdown)
+    story_state = {**trading_state, "as_of_date": target_date}
+    stories = build_stories(cycles, enriched_positions, realized_rows, quotes, documents, story_state, storyline_markdown)
     latest_by_category = {
         category: next((item for item in documents if item["category"] == category), None)
         for category in TIMELINE_CATEGORIES
@@ -1230,30 +1284,115 @@ def render_document(
     return page_shell(item["title"], "timeline", content, generated_at, depth=1)
 
 
+def cycle_event_rows(events: list[dict[str, Any]]) -> str:
+    rows = []
+    for event in events:
+        side = str(event.get("side") or "")
+        label = "买入" if side == "BUY" else "卖出"
+        cls = "buy" if side == "BUY" else "sell"
+        rows.append(
+            f"""<tr>
+              <td><span class="mono">{esc(event.get('trade_date'))}</span><small>{esc(event.get('trade_time'))}</small></td>
+              <td><span class="side-label {cls}">{label}</span></td>
+              <td class="num">{qty(event.get('quantity'))}</td>
+              <td class="num">{number(event.get('price')):.3f}</td>
+              <td class="num">{money(event.get('amount'))}</td>
+              <td class="num">{money(event.get('fees'))}</td>
+            </tr>"""
+        )
+    return "".join(rows)
+
+
+def render_cycle_modes(modes: list[dict[str, Any]]) -> str:
+    rows = []
+    for mode in modes:
+        sample = mode.get("sample", {})
+        mode_id = str(mode.get("id") or "")
+        rows.append(
+            f"""<article class="cycle-mode" id="mode-{esc(mode_id)}">
+              <div><a href="#mode-{esc(mode_id)}"><strong>{esc(mode.get('name') or mode_id)}</strong></a><small class="mono">{esc(mode_id)}</small></div>
+              <dl><div><dt>执行结果</dt><dd>{esc(sample.get('execution_result') or '待核验')}</dd></div><div><dt>证据方向</dt><dd>{esc(sample.get('evidence_direction') or '待核验')}</dd></div><div><dt>证据类型</dt><dd>{esc(sample.get('evidence_type') or '待核验')}</dd></div></dl>
+              <p>{esc(sample.get('note'))}</p>
+            </article>"""
+        )
+    return "".join(rows) or '<div class="empty-state">本周期未绑定交易模式样本。</div>'
+
+
+def render_cycle_panel(cycle: dict[str, Any], selected: bool) -> str:
+    is_open = cycle.get("status") == "open"
+    cycle_id = str(cycle.get("cycle_id") or "")
+    close_value = "进行中" if is_open else str(cycle.get("close_date") or "待核验")
+    result_value = "进行中" if is_open else money(cycle.get("realized_pnl_after_fees"))
+    holding_value = "进行中" if is_open else qty(cycle.get("holding_days"))
+    documents = "".join(document_link(item, "../") for item in cycle.get("linked_documents", []))
+    documents = documents or '<div class="empty-state">本周期暂无关联训练记录。</div>'
+    market_facts = ""
+    if is_open:
+        market_facts = f"""
+          <div><dt>当前数量</dt><dd class="mono">{qty(cycle.get('current_quantity'))}</dd></div>
+          <div><dt>当前成本</dt><dd class="mono">{money(cycle.get('current_cost'))}</dd></div>
+          <div><dt>最新价格</dt><dd class="mono">{money(cycle.get('latest_price'))}</dd></div>
+          <div><dt>浮动盈亏</dt><dd class="mono {value_class(cycle.get('unrealized_pnl'))}">{money(cycle.get('unrealized_pnl'))}</dd></div>
+        """
+    else:
+        market_facts = f"""
+          <div><dt>总买入成本</dt><dd class="mono">{money(cycle.get('buy_cost_after_fees'))}</dd></div>
+          <div><dt>净卖出收入</dt><dd class="mono">{money(cycle.get('sell_proceeds_after_fees'))}</dd></div>
+          <div><dt>收益率</dt><dd class="mono {value_class(cycle.get('return_pct'))}">{pct(cycle.get('return_pct'))}</dd></div>
+        """
+    hidden = "" if selected else " hidden"
+    return f"""<section class="cycle-detail" data-cycle-panel="{esc(cycle_id)}"{hidden}>
+      <header class="cycle-detail-heading"><div><span class="page-context mono">{esc(cycle_id)}</span><h2>{'进行中周期' if is_open else '已关闭周期'}</h2></div><strong class="mono {value_class(cycle.get('unrealized_pnl') if is_open else cycle.get('realized_pnl_after_fees'))}">{result_value}</strong></header>
+      <dl class="cycle-facts">
+        <div><dt>首次买入</dt><dd class="mono">{esc(cycle.get('first_buy_date') or '待核验')}</dd></div>
+        <div><dt>最后加仓</dt><dd class="mono">{esc(cycle.get('last_buy_date') or '待核验')}</dd></div>
+        <div><dt>最终平仓</dt><dd class="mono">{esc(close_value)}</dd></div>
+        <div><dt>持股自然日</dt><dd class="mono">{holding_value}</dd></div>
+        <div><dt>{'财务结果' if is_open else '周期盈亏'}</dt><dd class="mono {value_class(cycle.get('unrealized_pnl') if is_open else cycle.get('realized_pnl_after_fees'))}">{result_value}</dd></div>
+        {market_facts}
+      </dl>
+      <section class="cycle-section"><div class="section-heading"><div><h3>成交事件</h3><p>本周期账本事实。</p></div></div><div class="table-scroll"><table><thead><tr><th>日期 / 时间</th><th>方向</th><th class="num">数量</th><th class="num">价格</th><th class="num">金额</th><th class="num">费用</th></tr></thead><tbody>{cycle_event_rows(cycle.get('events', []))}</tbody></table></div></section>
+      <section class="cycle-section"><div class="section-heading"><div><h3>模式与执行证据</h3></div></div>{render_cycle_modes(cycle.get('linked_modes', []))}</section>
+      <section class="cycle-section"><div class="section-heading"><div><h3>关联训练记录</h3></div><span class="count-label">{len(cycle.get('linked_documents', []))} 篇</span></div><div class="timeline-list">{documents}</div></section>
+    </section>"""
+
+
 def render_stock(story: dict[str, Any], generated_at: str) -> str:
-    documents = "".join(document_link(item, "../") for item in story["documents"]) or '<div class="empty-state">暂无关联训练文档。</div>'
+    lifetime = story["lifetime"]
+    default_cycle_id = str(story.get("default_cycle_id") or "")
+    cycle_buttons = []
+    cycle_panels = []
+    for cycle in story["cycles"]:
+        cycle_id = str(cycle.get("cycle_id") or "")
+        selected = cycle_id == default_cycle_id
+        is_open = cycle.get("status") == "open"
+        date_label = "进行中" if is_open else str(cycle.get("close_date") or "待核验")
+        pnl_value = cycle.get("unrealized_pnl") if is_open else cycle.get("realized_pnl_after_fees")
+        cycle_buttons.append(
+            f'<button type="button" data-cycle-option="{esc(cycle_id)}" aria-pressed="{str(selected).lower()}"><span>{"进行中" if is_open else "已关闭"}</span><strong class="mono">{esc(date_label)}</strong><small class="mono {value_class(pnl_value)}">{money(pnl_value)}</small></button>'
+        )
+        cycle_panels.append(render_cycle_panel(cycle, selected))
     storyline = (
         f'<article class="markdown-body">{render_markdown(story["storyline_markdown"])}</article>'
         if story["storyline_markdown"]
         else '<div class="empty-state">账本事实已形成，但教练故事线尚未人工沉淀。</div>'
     )
-    is_current = story["status"] == "current"
-    cost_value = story["average_cost"] if is_current else "—"
-    cost_note = f"行情截至 {story['quote_date'] or '待核验'}" if is_current else "已清仓，不再计算持仓成本"
-    floating_value = story["unrealized_pnl"] if is_current else "—"
-    floating_note = "最新行情市值减持仓成本" if is_current else "已清仓，无持仓浮动盈亏"
     content = f"""
       <nav class="breadcrumbs" aria-label="面包屑"><a href="../stories.html">股票故事</a><span>/</span><span class="mono">{esc(story['stock_code'])}</span></nav>
-      <header class="stock-heading"><div><span class="page-context mono">{esc(story['status_label'])}</span><h1>{esc(story['stock_name'])} <span class="mono">{esc(story['stock_code'])}</span></h1><p>{esc(story['first_trade_date'])} 至 {esc(story['latest_trade_date'])} · {story['trade_count']} 个成交事件</p></div><span class="review-badge">{esc(story['storyline_review_status'])}</span></header>
-      <section class="metrics-band stock-metrics">
-        {metric_cell('当前数量', qty(story['open_quantity']) if story['status'] == 'current' else '0', story['status_label'], True, semantic=False)}
-        {metric_cell('券商式持仓成本', cost_value, cost_note, semantic=False)}
-        {metric_cell('已实现盈亏', story['realized_pnl'], '含费用及证券现金调整')}
-        {metric_cell('持仓浮动盈亏', floating_value, floating_note, semantic=is_current)}
-        {metric_cell('故事总盈亏', story['total_pnl'], '已实现 + 未实现')}
-      </section>
-      <div class="work-grid stock-work-grid"><section class="work-surface"><div class="section-heading"><div><h2>成交生命周期</h2><p>账本事实，按时间倒序。</p></div></div><div class="table-scroll"><table><thead><tr><th>日期 / 时间</th><th>股票</th><th>方向</th><th class="num">数量</th><th class="num">价格</th><th class="num">金额</th><th class="num">费用</th></tr></thead><tbody>{trade_rows_html(story['trades'], '../')}</tbody></table></div></section><aside class="inspector-surface"><div class="section-heading"><div><h2>教练故事线</h2><p>与账本事实分开显示。</p></div></div>{storyline}</aside></div>
-      <section class="work-surface"><div class="section-heading"><div><h2>关联训练记录</h2><p>手记、股票池和复盘中出现的相关证据。</p></div><span class="count-label">{story['document_count']} 篇</span></div><div class="timeline-list">{documents}</div></section>
+      <header class="stock-lifetime"><div class="stock-heading"><div><span class="page-context mono">{esc(story['status_label'])}</span><h1>{esc(story['stock_name'])} <span class="mono">{esc(story['stock_code'])}</span></h1><p>{esc(story['first_trade_date'])} 至 {esc(story['latest_trade_date'])} · {len(story['cycles'])} 个交易周期</p></div><span class="review-badge">{esc(story['storyline_review_status'])}</span></div>
+        <section class="metrics-band stock-metrics">
+          {metric_cell('完整周期', qty(lifetime['closed_cycles']), '已完成买入至清仓', True, semantic=False)}
+          {metric_cell('周期胜率', pct(lifetime['win_rate']), '按已关闭周期统计', semantic=False)}
+          {metric_cell('平均持股自然日', qty(lifetime['average_holding_days']) if lifetime['average_holding_days'] is not None else '—', '按已关闭周期统计', semantic=False)}
+          {metric_cell('累计已实现盈亏', lifetime['realized_pnl'], '含费用及证券现金调整')}
+          {metric_cell('生命周期总盈亏', lifetime['total_pnl'], '持仓缺少核验行情时待核验')}
+        </section>
+      </header>
+      <div class="stock-cycle-layout" data-stock-cycles data-default-cycle="{esc(default_cycle_id)}">
+        <nav class="cycle-list" aria-label="交易周期">{''.join(cycle_buttons)}</nav>
+        <div class="cycle-panels">{''.join(cycle_panels)}</div>
+      </div>
+      <section class="storyline-section"><div class="section-heading"><div><h2>教练故事线</h2><p>与账本事实分开显示。</p></div></div>{storyline}</section>
     """
     return page_shell(f"{story['stock_name']} {story['stock_code']}", "stories", content, generated_at, depth=1)
 
