@@ -363,6 +363,9 @@ class HomepageRendererTests(unittest.TestCase):
     def test_unsafe_state_sources_are_plain_text_in_gate_eligibility_and_discipline(self) -> None:
         unsafe_paths = (
             "javascript:alert(1)",
+            "java\nscript:alert(1)",
+            "java\tscript:alert(1)",
+            "java\rscript:alert(1)",
             "data:text/html,<p>bad</p>",
             "https://example.com/source.md",
             "//example.com/source.md",
@@ -410,6 +413,11 @@ class HomepageRendererTests(unittest.TestCase):
                 self.assertNotIn(f'href="{escaped_path}"', discipline_html)
                 self.assertIn(escaped_path, state_html)
                 self.assertIn(escaped_path, discipline_html)
+
+    def test_safe_relative_href_rejects_ascii_controls_inside_obfuscated_scheme(self) -> None:
+        for codepoint in (*range(0x20), 0x7F):
+            with self.subTest(codepoint=codepoint):
+                self.assertIsNone(site.safe_relative_href(f"java{chr(codepoint)}script:alert(1)"))
 
 
 class SiteGenerationTests(unittest.TestCase):

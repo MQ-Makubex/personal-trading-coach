@@ -850,6 +850,8 @@ def safe_relative_href(value: Any) -> str | None:
             break
         normalized = decoded
     normalized = normalized.replace("\\", "/")
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in normalized):
+        return None
     if normalized.startswith("/"):
         return None
     if re.match(r"^[A-Za-z]:", normalized):
