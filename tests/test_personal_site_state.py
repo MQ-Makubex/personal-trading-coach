@@ -18,6 +18,9 @@ from init_state import init_state  # noqa: E402
 from personal_site_state import load_discipline_feed, load_trading_modes  # noqa: E402
 
 
+NOW = datetime(2026, 7, 11, 12, 0, tzinfo=timezone.utc)
+
+
 def valid_gate() -> dict[str, object]:
     return {
         "status": "observe",
@@ -64,6 +67,59 @@ def valid_modes_payload(modes: list[dict[str, object]]) -> dict[str, object]:
         "mode_eligibility": [],
         "modes": modes,
     }
+
+
+def valid_eligibility(mode_id: str = "mode-a", **overrides: object) -> dict[str, object]:
+    eligibility: dict[str, object] = {
+        "mode_id": mode_id,
+        "status": "eligible",
+        "target_date": "2026-07-12",
+        "reasons": ["闸门已核验"],
+        "source_path": "reports/run-20260711/coach_note.md",
+    }
+    eligibility.update(overrides)
+    return eligibility
+
+
+def message(
+    message_id: str = "message-a",
+    level: str = "reminder",
+    created_at: str = "2026-07-01T00:00:00+00:00",
+    **overrides: str,
+) -> dict[str, str]:
+    row = {
+        "id": message_id,
+        "status": "active",
+        "level": level,
+        "scope": "global",
+        "stock_code": "",
+        "mode_id": "",
+        "message": message_id,
+        "source_path": "reports/a.md",
+        "effective_at": "",
+        "expires_at": "",
+        "created_at": created_at,
+    }
+    row.update(overrides)
+    return row
+
+
+def load_modes_payload(
+    payload: dict[str, object], cycles: dict[str, dict[str, object]] | None = None
+) -> dict[str, object]:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "trading_modes.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return load_trading_modes(path, cycles or {})
+
+
+def load_discipline_payload(
+    messages: list[dict[str, str]], now: datetime = NOW
+) -> dict[str, object]:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "discipline_feed.json"
+        path.write_text(json.dumps({"version": 1, "messages": messages}), encoding="utf-8")
+        return load_discipline_feed(path, now)
 
 
 class TradingModeStateTest(unittest.TestCase):
@@ -124,52 +180,202 @@ class TradingModeStateTest(unittest.TestCase):
         self.assertEqual(result["coach_gate"]["status"], "pending")
         self.assertEqual(result["modes"], [])
 
-    def test_unsafe_or_duplicate_mode_state_returns_repair_state(self) -> None:
-        payload = valid_modes_payload(
-            [
-                valid_mode([valid_sample("cycle-1", source_paths=["../private.md"])]),
-                valid_mode([]),
-            ]
-        )
+    def test_unreadable_mode_path_returns_repair_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "trading_modes.json"
-            path.write_text(json.dumps(payload), encoding="utf-8")
-            result = load_trading_modes(path, {})
+            result = load_trading_modes(Path(tmp), {})
 
-        self.assertIn("状态数据待修复", result["error"])
-        self.assertEqual(result["coach_gate"]["status"], "pending")
-
-    def test_invalid_gate_status_returns_repair_state(self) -> None:
-        payload = valid_modes_payload([])
-        payload["coach_gate"]["status"] = "ready"  # type: ignore[index]
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "trading_modes.json"
-            path.write_text(json.dumps(payload), encoding="utf-8")
-            result = load_trading_modes(path, {})
-
-        self.assertIn("状态数据待修复", result["error"])
+        self.assert_mode_repair_state(result)
 
     def test_mode_eligibility_records_are_validated_and_returned(self) -> None:
         payload = valid_modes_payload([])
-        payload["mode_eligibility"] = [
-            {
-                "mode_id": "mode-a",
-                "status": "eligible",
-                "target_date": "2026-07-12",
-                "reasons": ["闸门已核验"],
-                "source_path": "reports/run-20260711/coach_note.md",
-            }
-        ]
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "trading_modes.json"
-            path.write_text(json.dumps(payload), encoding="utf-8")
-            result = load_trading_modes(path, {})
+        payload["mode_eligibility"] = [valid_eligibility()]
+        result = load_modes_payload(payload)
 
         self.assertIsNone(result["error"])
         self.assertEqual(result["mode_eligibility"][0]["status"], "eligible")
 
+    def test_unsafe_path_forms_return_non_leaking_repair_state(self) -> None:
+        unsafe_paths = {
+            "posix_absolute": "/Users/private.md",
+            "windows_drive_absolute": "C:\\Users\\private.md",
+            "windows_drive_relative": "C:private.md",
+            "windows_unc": "\\\\server\\share\\private.md",
+            "windows_rooted": "\\private.md",
+            "posix_parent": "../private.md",
+            "windows_parent": "..\\private.md",
+        }
+
+        for case, unsafe_path in unsafe_paths.items():
+            with self.subTest(case=case):
+                payload = valid_modes_payload([])
+                payload["coach_gate"] = valid_gate()
+                payload["coach_gate"]["source_path"] = unsafe_path  # type: ignore[index]
+                result = load_modes_payload(payload)
+
+                self.assert_mode_repair_state(result)
+                self.assertNotIn(unsafe_path, result["error"])
+
+    def test_empty_and_portable_relative_paths_are_allowed(self) -> None:
+        allowed_paths = ["", "reports/run/coach_note.md", "reports\\run\\coach_note.md"]
+
+        for source_path in allowed_paths:
+            with self.subTest(source_path=source_path):
+                payload = valid_modes_payload([])
+                payload["coach_gate"] = valid_gate()
+                payload["coach_gate"]["source_path"] = source_path  # type: ignore[index]
+                result = load_modes_payload(payload)
+
+                self.assertIsNone(result["error"])
+
+    def test_every_state_path_field_rejects_windows_parent_traversal(self) -> None:
+        def gate_payload() -> dict[str, object]:
+            payload = valid_modes_payload([])
+            payload["coach_gate"]["source_path"] = "..\\private.md"  # type: ignore[index]
+            return payload
+
+        def eligibility_payload() -> dict[str, object]:
+            payload = valid_modes_payload([])
+            payload["mode_eligibility"] = [valid_eligibility(source_path="..\\private.md")]
+            return payload
+
+        def sample_payload() -> dict[str, object]:
+            return valid_modes_payload(
+                [valid_mode([valid_sample("cycle-a", source_paths=["..\\private.md"])])]
+            )
+
+        for field, payload_factory in (
+            ("gate", gate_payload),
+            ("eligibility", eligibility_payload),
+            ("sample", sample_payload),
+        ):
+            with self.subTest(field=field):
+                self.assert_mode_repair_state(load_modes_payload(payload_factory()))
+
+    def test_duplicate_mode_sample_and_eligibility_ids_each_return_repair_state(self) -> None:
+        duplicate_mode = valid_modes_payload([valid_mode([]), valid_mode([])])
+        duplicate_sample = valid_modes_payload(
+            [valid_mode([valid_sample("cycle-a"), valid_sample("cycle-a")])]
+        )
+        duplicate_eligibility = valid_modes_payload([])
+        duplicate_eligibility["mode_eligibility"] = [
+            valid_eligibility("mode-a"),
+            valid_eligibility("mode-a"),
+        ]
+
+        for identifier, payload in (
+            ("mode_id", duplicate_mode),
+            ("sample_cycle_id", duplicate_sample),
+            ("eligibility_mode_id", duplicate_eligibility),
+        ):
+            with self.subTest(identifier=identifier):
+                self.assert_mode_repair_state(load_modes_payload(payload))
+
+    def test_partially_valid_mode_payload_falls_back_to_whole_safe_state(self) -> None:
+        valid = valid_mode([])
+        invalid = valid_mode([])
+        invalid["id"] = "mode-b"
+        invalid["status"] = "published"
+
+        result = load_modes_payload(valid_modes_payload([valid, invalid]))
+
+        self.assert_mode_repair_state(result)
+        self.assertEqual(result["modes"], [])
+
+    def test_allowed_gate_statuses_for_gate_and_eligibility(self) -> None:
+        for location in ("coach_gate", "mode_eligibility"):
+            for status in ("pending", "locked", "observe", "eligible"):
+                with self.subTest(location=location, status=status):
+                    payload = valid_modes_payload([])
+                    if location == "coach_gate":
+                        payload["coach_gate"]["status"] = status  # type: ignore[index]
+                    else:
+                        payload["mode_eligibility"] = [valid_eligibility(status=status)]
+
+                    self.assertIsNone(load_modes_payload(payload)["error"])
+
+    def test_rejected_gate_statuses_for_gate_and_eligibility(self) -> None:
+        payloads = []
+        invalid_gate = valid_modes_payload([])
+        invalid_gate["coach_gate"]["status"] = "ready"  # type: ignore[index]
+        payloads.append(("coach_gate", invalid_gate))
+        invalid_eligibility = valid_modes_payload([])
+        invalid_eligibility["mode_eligibility"] = [valid_eligibility(status="ready")]
+        payloads.append(("mode_eligibility", invalid_eligibility))
+
+        for location, payload in payloads:
+            with self.subTest(location=location):
+                self.assert_mode_repair_state(load_modes_payload(payload))
+
+    def test_allowed_mode_statuses(self) -> None:
+        for status in ("validating", "review", "replicable", "avoid"):
+            with self.subTest(status=status):
+                mode = valid_mode([])
+                mode["status"] = status
+
+                result = load_modes_payload(valid_modes_payload([mode]))
+
+                self.assertIsNone(result["error"])
+                self.assertEqual(result["modes"][0]["status"], status)
+
+    def test_rejected_mode_status_returns_repair_state(self) -> None:
+        mode = valid_mode([])
+        mode["status"] = "published"
+
+        self.assert_mode_repair_state(load_modes_payload(valid_modes_payload([mode])))
+
+    def test_allowed_sample_enum_values(self) -> None:
+        enum_values = {
+            "evidence_type": ("formal", "historical_reference"),
+            "execution_result": ("planned", "violated", "insufficient"),
+            "evidence_direction": ("support", "oppose", "indeterminate"),
+        }
+
+        for field, values in enum_values.items():
+            for value in values:
+                with self.subTest(field=field, value=value):
+                    sample = valid_sample("cycle-a", **{field: value})
+                    result = load_modes_payload(valid_modes_payload([valid_mode([sample])]))
+
+                    self.assertIsNone(result["error"])
+
+    def test_rejected_sample_enum_values_return_repair_state(self) -> None:
+        for field in ("evidence_type", "execution_result", "evidence_direction"):
+            with self.subTest(field=field):
+                sample = valid_sample("cycle-a", **{field: "unknown"})
+                result = load_modes_payload(valid_modes_payload([valid_mode([sample])]))
+
+                self.assert_mode_repair_state(result)
+
+    def assert_mode_repair_state(self, result: dict[str, object]) -> None:
+        self.assertIsInstance(result["error"], str)
+        self.assertIn("状态数据待修复", result["error"])
+        self.assertEqual(result["coach_gate"]["status"], "pending")
+        self.assertEqual(result["mode_eligibility"], [])
+        self.assertEqual(result["modes"], [])
+
 
 class DisciplineStateTest(unittest.TestCase):
+    def test_missing_discipline_file_returns_empty_state_without_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = load_discipline_feed(Path(tmp) / "missing.json", NOW)
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["messages"], [])
+
+    def test_malformed_discipline_json_returns_repair_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "discipline_feed.json"
+            path.write_text("{not json", encoding="utf-8")
+            result = load_discipline_feed(path, NOW)
+
+        self.assert_discipline_repair_state(result)
+
+    def test_unreadable_discipline_path_returns_repair_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = load_discipline_feed(Path(tmp), NOW)
+
+        self.assert_discipline_repair_state(result)
+
     def test_only_current_active_messages_are_returned(self) -> None:
         payload = {
             "version": 1,
@@ -243,14 +449,95 @@ class DisciplineStateTest(unittest.TestCase):
             ["red-new", "red-old", "reminder-new", "reminder-old"],
         )
 
-    def test_invalid_message_enum_or_absolute_path_returns_repair_state(self) -> None:
-        payload = {"version": 1, "messages": [message("bad", "notice", "2026-07-01T00:00:00+00:00")]}
-        payload["messages"][0]["source_path"] = "/Users/private.md"  # type: ignore[index]
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "discipline_feed.json"
-            path.write_text(json.dumps(payload), encoding="utf-8")
-            result = load_discipline_feed(path, datetime(2026, 7, 11, tzinfo=timezone.utc))
+    def test_duplicate_message_ids_return_repair_state(self) -> None:
+        result = load_discipline_payload([message("same"), message("same")])
 
+        self.assert_discipline_repair_state(result)
+
+    def test_partially_valid_discipline_payload_falls_back_to_whole_safe_state(self) -> None:
+        result = load_discipline_payload([message("valid"), message("invalid", status="published")])
+
+        self.assert_discipline_repair_state(result)
+        self.assertEqual(result["messages"], [])
+
+    def test_message_source_path_rejects_windows_parent_traversal(self) -> None:
+        result = load_discipline_payload([message(source_path="..\\private.md")])
+
+        self.assert_discipline_repair_state(result)
+        self.assertNotIn("..\\private.md", result["error"])
+
+    def test_allowed_message_enum_values(self) -> None:
+        enum_values = {
+            "status": ("draft", "active", "archived"),
+            "level": ("reminder", "red_card"),
+            "scope": ("global", "stock", "mode"),
+        }
+
+        for field, values in enum_values.items():
+            for value in values:
+                with self.subTest(field=field, value=value):
+                    result = load_discipline_payload([message(**{field: value})])
+
+                    self.assertIsNone(result["error"])
+
+    def test_rejected_message_enum_values_return_repair_state(self) -> None:
+        for field in ("status", "level", "scope"):
+            with self.subTest(field=field):
+                result = load_discipline_payload([message(**{field: "unknown"})])
+
+                self.assert_discipline_repair_state(result)
+
+    def test_effective_at_boundary_is_inclusive(self) -> None:
+        timestamp = "2026-07-11T12:00:00+00:00"
+
+        result = load_discipline_payload([message(effective_at=timestamp)], NOW)
+
+        self.assertEqual([row["id"] for row in result["messages"]], ["message-a"])
+
+    def test_expires_at_boundary_is_exclusive(self) -> None:
+        timestamp = "2026-07-11T12:00:00+00:00"
+
+        result = load_discipline_payload([message(expires_at=timestamp)], NOW)
+
+        self.assertEqual(result["messages"], [])
+
+    def test_invalid_datetime_fields_each_return_repair_state(self) -> None:
+        for field in ("created_at", "effective_at", "expires_at"):
+            with self.subTest(field=field):
+                result = load_discipline_payload([message(**{field: "not-a-datetime"})])
+
+                self.assert_discipline_repair_state(result)
+
+    def test_naive_state_datetime_is_normalized_to_utc(self) -> None:
+        result = load_discipline_payload([message(effective_at="2026-07-11T12:00:00")], NOW)
+
+        self.assertEqual([row["id"] for row in result["messages"]], ["message-a"])
+
+    def test_naive_now_is_normalized_to_utc(self) -> None:
+        naive_now = datetime(2026, 7, 11, 12, 0)
+
+        result = load_discipline_payload(
+            [message(effective_at="2026-07-11T12:00:00+00:00")],
+            naive_now,
+        )
+
+        self.assertEqual([row["id"] for row in result["messages"]], ["message-a"])
+
+    def test_offset_aware_datetimes_compare_by_instant(self) -> None:
+        result = load_discipline_payload(
+            [
+                message(
+                    effective_at="2026-07-11T20:00:00+08:00",
+                    expires_at="2026-07-11T21:00:00+08:00",
+                )
+            ],
+            NOW,
+        )
+
+        self.assertEqual([row["id"] for row in result["messages"]], ["message-a"])
+
+    def assert_discipline_repair_state(self, result: dict[str, object]) -> None:
+        self.assertIsInstance(result["error"], str)
         self.assertIn("状态数据待修复", result["error"])
         self.assertEqual(result["messages"], [])
 
@@ -267,23 +554,6 @@ class StateInitializationTest(unittest.TestCase):
             self.assertIn(("discipline_feed.json", "created"), first)
             self.assertIn(("trading_modes.json", "kept"), second)
             self.assertEqual((state / "trading_modes.json").read_text(encoding="utf-8"), '{"private": true}')
-
-
-def message(message_id: str, level: str, created_at: str) -> dict[str, str]:
-    return {
-        "id": message_id,
-        "status": "active",
-        "level": level,
-        "scope": "global",
-        "stock_code": "",
-        "mode_id": "",
-        "message": message_id,
-        "source_path": "reports/a.md",
-        "effective_at": "",
-        "expires_at": "",
-        "created_at": created_at,
-    }
-
 
 if __name__ == "__main__":
     unittest.main()

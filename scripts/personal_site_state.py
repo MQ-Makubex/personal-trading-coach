@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 
@@ -46,8 +46,10 @@ def default_discipline_feed() -> dict[str, Any]:
 
 
 def _is_project_relative(value: str) -> bool:
-    candidate = Path(value)
-    return not candidate.is_absolute() and ".." not in candidate.parts
+    for candidate in (PurePosixPath(value), PureWindowsPath(value)):
+        if candidate.is_absolute() or candidate.drive or candidate.root or ".." in candidate.parts:
+            return False
+    return True
 
 
 def _repair(default: dict[str, Any], reason: str) -> dict[str, Any]:
