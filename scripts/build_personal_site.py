@@ -64,6 +64,7 @@ NAV_ITEMS = (
     ("home", "今日", "index.html"),
     ("timeline", "训练时间线", "timeline.html"),
     ("stories", "股票故事", "stories.html"),
+    ("modes", "交易模式", "modes.html"),
     ("ledger", "交易底账", "ledger.html"),
     ("rules", "纪律规则", "rules.html"),
 )
@@ -900,6 +901,25 @@ GATE_COPY = {
     "eligible": "可进入验证",
 }
 
+MODE_STATUS_COPY = {
+    "validating": "验证中",
+    "review": "人工评审",
+    "replicable": "可复制",
+    "avoid": "回避",
+}
+
+SAMPLE_EXECUTION_COPY = {
+    "planned": "按计划执行",
+    "violated": "偏离计划",
+    "insufficient": "证据不足",
+}
+
+EVIDENCE_DIRECTION_COPY = {
+    "support": "支持",
+    "oppose": "反对",
+    "indeterminate": "无法判断",
+}
+
 
 def safe_relative_href(value: Any) -> str | None:
     raw = str(value or "").strip()
@@ -952,7 +972,7 @@ def render_coach_state(data: dict[str, Any]) -> str:
         target = str(item.get("target_date") or "待核验")
         eligibility_rows.append(
             f"""<article class="eligibility-row status-{esc(status)}">
-              <div><strong>{esc(modes_by_id.get(mode_id) or mode_id)}</strong><span class="state-status">{esc(GATE_COPY.get(status, GATE_COPY['pending']))}</span></div>
+              <div><a href="modes.html#mode-{esc(mode_id)}"><strong>{esc(modes_by_id.get(mode_id) or mode_id)}</strong></a><span class="state-status">{esc(GATE_COPY.get(status, GATE_COPY['pending']))}</span></div>
               <small>目标日 <time class="mono">{esc(target)}</time></small>
               <ul>{state_reasons(item.get('reasons'))}</ul>
               {state_source_link(item.get('source_path'))}
@@ -1155,6 +1175,110 @@ def render_stories(data: dict[str, Any]) -> str:
     """
 
 
+def mode_definition_row(label: str, values: Any) -> str:
+    if isinstance(values, list):
+        content = "".join(f"<li>{esc(value)}</li>" for value in values) or "<li>待补充</li>"
+        value_html = f"<ul>{content}</ul>"
+    else:
+        value_html = f"<p>{esc(values or '待补充')}</p>"
+    return f'<div class="mode-definition-row"><dt>{esc(label)}</dt><dd>{value_html}</dd></div>'
+
+
+def mode_sample_rows(samples: list[dict[str, Any]]) -> str:
+    rows = []
+    for sample in samples:
+        cycle = sample.get("cycle") if sample.get("cycle_found") else None
+        cycle_id = str(sample.get("cycle_id") or "")
+        if isinstance(cycle, dict):
+            stock_code = str(cycle.get("stock_code") or "")
+            stock_name = str(cycle.get("stock_name") or stock_code)
+            cycle_link = (
+                f'<a href="stocks/{esc(stock_code)}.html?cycle={esc(cycle_id)}">'
+                f'<strong>{esc(stock_name)}</strong><small class="mono">{esc(stock_code)} · {esc(cycle_id)}</small></a>'
+            )
+            pnl_value = cycle.get("realized_pnl_after_fees")
+            return_value = pct(cycle.get("return_pct"))
+            holding_value = qty(cycle.get("holding_days")) if cycle.get("holding_days") is not None else "—"
+        else:
+            cycle_link = f'<strong>周期关联待修复</strong><small class="mono">{esc(cycle_id)}</small>'
+            pnl_value = None
+            return_value = "—"
+            holding_value = "—"
+        rows.append(
+            f"""<tr>
+              <td>{cycle_link}</td>
+              <td>{esc(SAMPLE_EXECUTION_COPY.get(str(sample.get('execution_result')), '待核验'))}</td>
+              <td class="num {value_class(pnl_value)}">{money(pnl_value)}</td>
+              <td class="num">{esc(return_value)}</td>
+              <td class="num">{esc(holding_value)}</td>
+              <td>{esc(EVIDENCE_DIRECTION_COPY.get(str(sample.get('evidence_direction')), '待核验'))}</td>
+              <td class="mode-sample-note">{esc(sample.get('note'))}</td>
+            </tr>"""
+        )
+    return "".join(rows) or '<tr><td colspan="7" class="muted">暂无样本</td></tr>'
+
+
+def render_modes(data: dict[str, Any]) -> str:
+    modes = data.get("trading_state", {}).get("modes", [])
+    counts = Counter(str(mode.get("status") or "") for mode in modes)
+    filters = [f'<button type="button" data-mode-filter="all" aria-pressed="true">全部 <span>{len(modes)}</span></button>']
+    for status in ("validating", "review", "replicable", "avoid"):
+        filters.append(
+            f'<button type="button" data-mode-filter="{status}" aria-pressed="false">{esc(MODE_STATUS_COPY[status])} <span>{counts.get(status, 0)}</span></button>'
+        )
+
+    rows = []
+    for mode in modes:
+        mode_id = str(mode.get("id") or "")
+        status = str(mode.get("status") or "validating")
+        search = " ".join(
+            [
+                str(mode.get("name") or ""),
+                mode_id,
+                *[str(value) for value in mode.get("applicable_environment", [])],
+                *[str(value) for value in mode.get("trigger_conditions", [])],
+                *[str(value) for value in mode.get("invalidation_conditions", [])],
+            ]
+        )
+        formal_samples = [sample for sample in mode.get("samples", []) if sample.get("evidence_type") == "formal"]
+        historical_samples = [
+            sample for sample in mode.get("samples", []) if sample.get("evidence_type") == "historical_reference"
+        ]
+        review_ready = '<span class="mode-review-ready">已达人工评审门槛</span>' if mode.get("review_ready") else ""
+        definitions = "".join(
+            (
+                mode_definition_row("适用环境", mode.get("applicable_environment")),
+                mode_definition_row("触发条件", mode.get("trigger_conditions")),
+                mode_definition_row("执行边界", mode.get("execution_boundaries")),
+                mode_definition_row("失效条件", mode.get("invalidation_conditions")),
+                mode_definition_row("最大风险", mode.get("max_risk")),
+                mode_definition_row("下一验证要求", mode.get("next_validation_requirement")),
+            )
+        )
+        sample_header = "<thead><tr><th>股票 / 周期</th><th>执行结果</th><th class=\"num\">盈亏</th><th class=\"num\">收益率</th><th class=\"num\">持股天数</th><th>证据方向</th><th>备注</th></tr></thead>"
+        rows.append(
+            f"""<article class="mode-entry" id="mode-{esc(mode_id)}" data-mode-item data-status="{esc(status)}" data-search="{esc(search)}">
+              <header class="mode-entry-heading"><div><span class="page-context mono">{esc(mode_id)} · v{esc(mode.get('version'))}</span><h2>{esc(mode.get('name') or mode_id)}</h2></div><div class="mode-state"><span>{esc(MODE_STATUS_COPY.get(status, status))}</span><strong class="mono">{mode.get('valid_formal_sample_count', 0)} / 3</strong>{review_ready}</div></header>
+              <dl class="mode-definitions">{definitions}</dl>
+              <section class="mode-samples"><div class="section-heading"><div><h3>正式样本</h3></div><span class="count-label">{len(formal_samples)} 项</span></div><div class="mode-table-scroll"><table>{sample_header}<tbody>{mode_sample_rows(formal_samples)}</tbody></table></div></section>
+              <section class="mode-samples"><div class="section-heading"><div><h3>历史参考</h3></div><span class="count-label">{len(historical_samples)} 项</span></div><div class="mode-table-scroll"><table>{sample_header}<tbody>{mode_sample_rows(historical_samples)}</tbody></table></div></section>
+            </article>"""
+        )
+    empty_archive = '<div class="empty-state mode-archive-empty"><strong>尚未建立结构化交易模式</strong><span class="mono">0 / 3</span></div>' if not modes else ""
+    return f"""
+      <header class="page-heading"><div><span class="page-context mono">TRADING MODE ARCHIVE</span><h1>交易模式</h1><p>保留人工定义、正式样本与历史参考，不自动改变模式状态。</p></div></header>
+      <section class="filter-surface mode-filter-surface" data-mode-app data-page-size="8">
+        <div class="filter-row"><label class="field"><span>搜索模式</span><input id="modeSearch" type="search" placeholder="名称、ID、环境、触发或失效条件…" autocomplete="off"></label></div>
+        <div class="segmented" role="group" aria-label="模式状态">{''.join(filters)}</div>
+        <div class="result-status" id="modeStatus" aria-live="polite"></div>
+        <div class="mode-list">{''.join(rows)}</div>
+        {empty_archive}
+        <div class="empty-state" id="modeEmpty" hidden>没有符合条件的交易模式。</div>
+        <nav class="pagination" aria-label="模式分页"><button type="button" data-page-prev>上一页</button><span id="modePage" class="mono"></span><button type="button" data-page-next>下一页</button></nav>
+      </section>
+    """
+
+
 def trade_rows_html(trades: list[dict[str, Any]], prefix: str = "") -> str:
     rows = []
     for trade in trades:
@@ -1310,7 +1434,7 @@ def render_cycle_modes(modes: list[dict[str, Any]]) -> str:
         mode_id = str(mode.get("id") or "")
         rows.append(
             f"""<article class="cycle-mode" id="mode-{esc(mode_id)}">
-              <div><a href="#mode-{esc(mode_id)}"><strong>{esc(mode.get('name') or mode_id)}</strong></a><small class="mono">{esc(mode_id)}</small></div>
+              <div><a href="../modes.html#mode-{esc(mode_id)}"><strong>{esc(mode.get('name') or mode_id)}</strong></a><small class="mono">{esc(mode_id)}</small></div>
               <dl><div><dt>执行结果</dt><dd>{esc(sample.get('execution_result') or '待核验')}</dd></div><div><dt>证据方向</dt><dd>{esc(sample.get('evidence_direction') or '待核验')}</dd></div><div><dt>证据类型</dt><dd>{esc(sample.get('evidence_type') or '待核验')}</dd></div></dl>
               <p>{esc(sample.get('note'))}</p>
             </article>"""
@@ -1421,6 +1545,7 @@ def public_site_data(data: dict[str, Any]) -> dict[str, Any]:
         "ability": data["ability"],
         "ledger_dataset": data["ledger_dataset"],
         "trading_state": data["trading_state"],
+        "modes": data["trading_state"].get("modes", []),
         "discipline_feed": data["discipline_feed"],
         "workbench": data["workbench"],
         "generated_at": data["generated_at"],
@@ -1450,6 +1575,7 @@ def write_site(
         "index": output_dir / "index.html",
         "timeline": output_dir / "timeline.html",
         "stories": output_dir / "stories.html",
+        "modes": output_dir / "modes.html",
         "ledger": output_dir / "ledger.html",
         "rules": output_dir / "rules.html",
         "data": output_dir / "site_data.json",
@@ -1457,6 +1583,7 @@ def write_site(
     pages["index"].write_text(page_shell("今日", "home", render_home(data), data["generated_at"]), encoding="utf-8")
     pages["timeline"].write_text(page_shell("训练时间线", "timeline", render_timeline(data), data["generated_at"]), encoding="utf-8")
     pages["stories"].write_text(page_shell("股票故事", "stories", render_stories(data), data["generated_at"]), encoding="utf-8")
+    pages["modes"].write_text(page_shell("交易模式", "modes", render_modes(data), data["generated_at"]), encoding="utf-8")
     pages["ledger"].write_text(
         page_shell(
             "交易底账",
@@ -1500,7 +1627,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     args = parser.parse_args()
     written = write_site(args.sqlite, args.reports, args.output, state_dir=args.state)
-    for key in ("index", "timeline", "stories", "ledger", "rules", "data"):
+    for key in ("index", "timeline", "stories", "modes", "ledger", "rules", "data"):
         print(f"{key}: {written[key]}")
     return 0
 

@@ -140,6 +140,52 @@
     render();
   }
 
+  function initModes() {
+    const root = document.querySelector('[data-mode-app]');
+    if (!root) return;
+    const items = Array.from(root.querySelectorAll('[data-mode-item]'));
+    const buttons = Array.from(root.querySelectorAll('[data-mode-filter]'));
+    const queryInput = root.querySelector('#modeSearch');
+    const statusLabel = root.querySelector('#modeStatus');
+    const empty = root.querySelector('#modeEmpty');
+    const pageLabel = root.querySelector('#modePage');
+    const previous = root.querySelector('[data-page-prev]');
+    const next = root.querySelector('[data-page-next]');
+    const pageSize = Number(root.dataset.pageSize) || 8;
+    const allowedStatuses = new Set(['all', 'validating', 'review', 'replicable', 'avoid']);
+    let status = params.get('status') || 'all';
+    if (!allowedStatuses.has(status)) status = 'all';
+    let query = params.get('q') || '';
+    let page = 1;
+    queryInput.value = query;
+
+    function render() {
+      const normalizedQuery = normalize(query);
+      const filtered = items.filter(item => {
+        const statusOk = status === 'all' || item.dataset.status === status;
+        const queryOk = !normalizedQuery || normalize(item.dataset.search).includes(normalizedQuery);
+        return statusOk && queryOk;
+      });
+      const result = paginate(filtered, page, pageSize);
+      page = result.page;
+      showPage(items, filtered, result, null, pageLabel, previous, next);
+      empty.hidden = items.length === 0 || filtered.length !== 0;
+      statusLabel.textContent = filtered.length ? `显示 ${filtered.length} 个模式` : (items.length ? '没有匹配结果' : '0 个模式');
+      setPressed(buttons, status, 'modeFilter');
+      updateUrl({status, q: query});
+    }
+
+    buttons.forEach(button => button.addEventListener('click', () => {
+      status = button.dataset.modeFilter;
+      page = 1;
+      render();
+    }));
+    queryInput.addEventListener('input', () => { query = queryInput.value; page = 1; render(); });
+    previous.addEventListener('click', () => { page -= 1; render(); });
+    next.addEventListener('click', () => { page += 1; render(); });
+    render();
+  }
+
   function initLedger() {
     const root = document.querySelector('[data-ledger-app]');
     if (!root) return;
@@ -275,6 +321,7 @@
 
   initTimeline();
   initStories();
+  initModes();
   initLedger();
   initPnlTable();
   initRules();

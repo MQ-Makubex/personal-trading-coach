@@ -435,6 +435,8 @@ class SiteGenerationTests(unittest.TestCase):
             rows = [
                 trade("2026-07-08", "09:30:00", "000001", "已平仓样本", "BUY", 100, 10.00, 1000.00, -1001.00, 1.00),
                 trade("2026-07-09", "14:50:00", "000001", "已平仓样本", "SELL", 100, 12.00, 1200.00, 1198.00, 1.00, 1.00),
+                trade("2026-07-10", "09:31:00", "000001", "已平仓样本", "BUY", 100, 10.00, 1000.00, -1000.00, 0),
+                trade("2026-07-10", "09:32:00", "000001", "已平仓样本", "SELL", 100, 10.00, 1000.00, 1000.00, 0),
                 trade("2026-07-10", "10:12:00", "300260", "新莱应材", "BUY", 60, 10.00, 600.00, -601.00, 1.00),
             ]
             write_sqlite(rows, sqlite_path)
@@ -470,9 +472,48 @@ class SiteGenerationTests(unittest.TestCase):
             ):
                 (state / filename).write_text(f"# {filename}\n\n本地状态。\n", encoding="utf-8")
 
+            cycle_data = site.build_data(sqlite_path, reports, output, state, date(2026, 7, 11))["cycles"]
+            cycle_ids = [str(cycle["cycle_id"]) for cycle in cycle_data]
+            (state / "trading_modes.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "coach_gate": gate("observe"),
+                        "mode_eligibility": [],
+                        "modes": [
+                            {
+                                "id": "mode-a",
+                                "name": "模式 A",
+                                "status": "validating",
+                                "version": "0.1",
+                                "applicable_environment": ["指数震荡，个股结构清晰"],
+                                "trigger_conditions": ["盘前条件已经绑定"],
+                                "execution_boundaries": ["只执行预案内动作"],
+                                "invalidation_conditions": ["触发条件消失"],
+                                "max_risk": "一单位风险",
+                                "next_validation_requirement": "人工复核三个正式样本",
+                                "samples": [
+                                    {
+                                        "cycle_id": cycle_id,
+                                        "evidence_type": "formal",
+                                        "execution_result": "planned",
+                                        "evidence_direction": "support",
+                                        "note": "按计划执行",
+                                        "source_paths": [],
+                                    }
+                                    for cycle_id in cycle_ids
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
             written = site.write_site(sqlite_path, reports, output, state_dir=state, as_of_date=date(2026, 7, 11))
 
-            expected_pages = {"index", "timeline", "stories", "ledger", "rules", "data"}
+            expected_pages = {"index", "timeline", "stories", "modes", "ledger", "rules", "data"}
             self.assertTrue(expected_pages.issubset(written))
             for key in expected_pages:
                 self.assertTrue(written[key].exists(), key)
@@ -480,6 +521,7 @@ class SiteGenerationTests(unittest.TestCase):
             index_html = written["index"].read_text(encoding="utf-8")
             timeline_html = written["timeline"].read_text(encoding="utf-8")
             stories_html = written["stories"].read_text(encoding="utf-8")
+            modes_html = written["modes"].read_text(encoding="utf-8")
             ledger_html = written["ledger"].read_text(encoding="utf-8")
             ledger_js_exists = (output / "assets" / "ledger.js").exists()
             rules_html = written["rules"].read_text(encoding="utf-8")
@@ -494,6 +536,21 @@ class SiteGenerationTests(unittest.TestCase):
             pool_html = pool_detail.read_text(encoding="utf-8")
 
         self.assertIn('href="timeline.html"', index_html)
+        self.assertIn('href="modes.html"', index_html)
+        self.assertIn("交易模式", modes_html)
+        self.assertIn('data-mode-app', modes_html)
+        self.assertIn('data-mode-filter="validating"', modes_html)
+        self.assertIn('id="mode-mode-a"', modes_html)
+        self.assertIn("3 / 3", modes_html)
+        self.assertIn("已达人工评审门槛", modes_html)
+        self.assertIn("历史参考", modes_html)
+        closed_cycle_id = next(
+            str(cycle["cycle_id"])
+            for cycle in cycle_data
+            if cycle["stock_code"] == "000001"
+        )
+        self.assertIn(f'href="stocks/000001.html?cycle={closed_cycle_id}"', modes_html)
+        self.assertNotIn("自动升级", modes_html)
         self.assertIn("总盈亏（含持仓）", index_html)
         self.assertIn("¥316.00", index_html)
         self.assertIn("总费用", index_html)
@@ -564,14 +621,48 @@ class SiteGenerationTests(unittest.TestCase):
         self.assertFalse(data["workbench"]["trade_plan"]["stale"])
         self.assertEqual(len(data["workbench"]["research_pool"]["candidates"]), 15)
         self.assertEqual(data["workbench"]["research_pool"]["candidates"][0]["stock_code"], "300001")
-        self.assertEqual(data["ability"]["closed_cycles"], 1)
-        self.assertEqual(len(data["cycles"]), 2)
+        self.assertEqual(data["ability"]["closed_cycles"], 2)
+        self.assertEqual(len(data["cycles"]), 3)
         self.assertEqual(data["ledger_dataset"]["bounds"], {"minimum": "2026-07-08", "maximum": "2026-07-10"})
-        self.assertEqual(len(data["ledger_dataset"]["cycles"]), 2)
+        self.assertEqual(len(data["ledger_dataset"]["cycles"]), 3)
         self.assertIn("modes", data["trading_state"])
         self.assertIn("messages", data["discipline_feed"])
         self.assertNotIn(str(root), json.dumps(data, ensure_ascii=False))
         self.assertNotIn("/Users/", json.dumps(data, ensure_ascii=False))
+
+    def test_mode_archive_empty_state_uses_only_structured_mode_data(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sqlite_path = root / "state" / "ledger.sqlite"
+            reports = root / "reports"
+            state = root / "state"
+            output = reports / "personal_site"
+            reports.mkdir(parents=True)
+            state.mkdir(parents=True)
+            write_sqlite([], sqlite_path)
+            (state / "personal_trading_modes.md").write_text(
+                "# 不应解析的模式\n\n这里写着三个正式样本，也不能生成结构化模式。\n",
+                encoding="utf-8",
+            )
+            (state / "trading_modes.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "coach_gate": gate("pending"),
+                        "mode_eligibility": [],
+                        "modes": [],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            written = site.write_site(sqlite_path, reports, output, state_dir=state, as_of_date=date(2026, 7, 11))
+            modes_html = written["modes"].read_text(encoding="utf-8")
+
+        self.assertIn("尚未建立结构化交易模式", modes_html)
+        self.assertIn("0 / 3", modes_html)
+        self.assertNotIn("不应解析的模式", modes_html)
 
     def test_homepage_marks_fallback_plan_with_source_date_and_link(self) -> None:
         data = {
@@ -754,7 +845,7 @@ class SiteGenerationTests(unittest.TestCase):
         for label in ("持股自然日", "财务结果", "周期盈亏", "执行结果", "证据方向", "成交事件", "关联训练记录"):
             self.assertIn(label, stock_html)
         self.assertIn('<span>中位持股自然日</span><strong class="mono">3</strong>', stock_html)
-        self.assertIn('href="#mode-mode-a"', stock_html)
+        self.assertIn('href="../modes.html#mode-mode-a"', stock_html)
         self.assertIn('href="../documents/cycle-evidence.html"', stock_html)
 
 
