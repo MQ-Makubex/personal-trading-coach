@@ -137,6 +137,56 @@ class WorkbenchArtifactTest(unittest.TestCase):
         self.assertEqual(site.infer_document_target_date("明日预案", "适用日期 2026年7月14日", "2026-07-11"), "2026-07-14")
         self.assertEqual(site.infer_document_target_date("明日预案", "无日期", "2026-07-11"), "2026-07-11")
 
+    def test_invalid_calendar_dates_become_unusable_instead_of_raising(self) -> None:
+        self.assertEqual(
+            site.infer_document_target_date(
+                "2026-02-31 明日预案",
+                "目标交易日：2026-02-31",
+                "2026-07-11",
+            ),
+            "2026-07-11",
+        )
+        self.assertEqual(site.infer_document_target_date("明日预案", "", "2026-02-31"), "")
+
+    def test_invalid_target_dates_are_ignored_by_resolution_and_fallback(self) -> None:
+        documents = [
+            {"category": "trade_plan", "target_date": "2027-99-99", "date": "2026-07-12", "mtime": "2026-07-12 18:00"},
+            {"category": "trade_plan", "target_date": "2026-07-10", "date": "2026-07-10", "mtime": "2026-07-10 18:00"},
+        ]
+
+        self.assertEqual(site.resolve_workbench_target_date(documents, date(2026, 7, 11)), "2026-07-11")
+        selected = site.select_daily_document(documents, "trade_plan", "2026-07-11")
+        self.assertEqual(selected["target_date"], "2026-07-10")
+        self.assertEqual(selected["document"]["target_date"], "2026-07-10")
+
+    def test_research_pool_parser_stops_at_a_new_table_header(self) -> None:
+        markdown = (
+            "| 代码 | 名称 | 题材 | 买点 |\n"
+            "| --- | --- | --- | --- |\n"
+            "| 300001 | 候选1 | 先进封装 | 20日线 |\n"
+            "\n"
+            "| 代码 | 名称 | 题材 | 买点 |\n"
+            "| --- | --- | --- | --- |\n"
+            "| 300002 | 后续表格 | 其他 | 突破 |\n"
+        )
+
+        rows = site.extract_research_pool_candidates(markdown)
+
+        self.assertEqual([row["stock_code"] for row in rows], ["300001"])
+
+    def test_research_pool_parser_stops_at_a_non_table_boundary(self) -> None:
+        markdown = (
+            "| 代码 | 名称 | 题材 | 买点 |\n"
+            "| --- | --- | --- | --- |\n"
+            "| 300001 | 候选1 | 先进封装 | 20日线 |\n"
+            "说明：下面是独立的手工记录。\n"
+            "| 300002 | 不应读取 | 其他 | 突破 |\n"
+        )
+
+        rows = site.extract_research_pool_candidates(markdown)
+
+        self.assertEqual([row["stock_code"] for row in rows], ["300001"])
+
     def test_missing_target_document_falls_back_and_marks_stale(self) -> None:
         documents = [
             {
@@ -306,6 +356,26 @@ class SiteGenerationTests(unittest.TestCase):
         stories = site.build_stories(trades, positions, [], {}, [], "")
 
         self.assertEqual([story["stock_code"] for story in stories], ["300260", "000002", "000001"])
+
+
+class SummaryContractTests(unittest.TestCase):
+    def test_summary_stock_count_ignores_non_six_digit_transaction_symbols(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sqlite_path = root / "state" / "ledger.sqlite"
+            reports = root / "reports"
+            output = reports / "personal_site"
+            state = root / "state"
+            rows = [
+                trade("2026-07-08", "09:30:00", "ABC", "非六位代码", "BUY", 100, 10.00, 1000.00, -1000.00, 0),
+                trade("2026-07-08", "10:30:00", "ABC", "非六位代码", "SELL", 100, 10.00, 1000.00, 1000.00, 0),
+                trade("2026-07-08", "11:30:00", "000001", "六位代码", "BUY", 100, 10.00, 1000.00, -1000.00, 0),
+            ]
+            write_sqlite(rows, sqlite_path)
+
+            data = site.build_data(sqlite_path, reports, output, state_dir=state, as_of_date=date(2026, 7, 11))
+
+        self.assertEqual(data["summary"]["stock_count"], 1)
 
 
 def trade(

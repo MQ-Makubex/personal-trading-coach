@@ -168,6 +168,24 @@ def infer_date(path: Path) -> str:
     return expanded.group(0) if expanded else ""
 
 
+def valid_iso_date(value: Any) -> str:
+    text = str(value or "")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return ""
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError:
+        return ""
+
+
+def date_from_match(match: re.Match[str]) -> str:
+    year, month, day = (int(value) for value in match.groups())
+    try:
+        return date(year, month, day).isoformat()
+    except ValueError:
+        return ""
+
+
 def infer_document_target_date(title: str, markdown_text: str, fallback_date: str) -> str:
     normalized = markdown_text[:4000]
     labeled = re.search(
@@ -175,67 +193,109 @@ def infer_document_target_date(title: str, markdown_text: str, fallback_date: st
         normalized,
     )
     if labeled:
-        year, month, day = (int(value) for value in labeled.groups())
-        return date(year, month, day).isoformat()
+        result = date_from_match(labeled)
+        if result:
+            return result
     for source in (title, normalized[:800]):
         expanded = re.search(r"(20\d{2})[-年/](\d{1,2})[-月/](\d{1,2})日?", source)
         if expanded:
-            year, month, day = (int(value) for value in expanded.groups())
-            return date(year, month, day).isoformat()
+            result = date_from_match(expanded)
+            if result:
+                return result
         compact = re.search(r"(?<!\d)(20\d{6})(?!\d)", source)
         if compact:
-            value = compact.group(1)
-            return date(int(value[:4]), int(value[4:6]), int(value[6:])).isoformat()
-    return fallback_date
+            result = valid_iso_date(f"{compact.group(1)[:4]}-{compact.group(1)[4:6]}-{compact.group(1)[6:]}")
+            if result:
+                return result
+    return valid_iso_date(fallback_date)
 
 
 def resolve_workbench_target_date(documents: list[dict[str, Any]], as_of_date: date) -> str:
-    explicit = [
-        date.fromisoformat(str(item["target_date"]))
-        for item in documents
-        if item.get("category") in {"trade_plan", "research_pool"} and item.get("target_date")
-    ]
+    explicit: list[date] = []
+    for item in documents:
+        if item.get("category") not in {"trade_plan", "research_pool"}:
+            continue
+        normalized = valid_iso_date(item.get("target_date"))
+        if normalized:
+            explicit.append(date.fromisoformat(normalized))
     return max([as_of_date, *explicit]).isoformat()
 
 
 def select_daily_document(
     documents: list[dict[str, Any]], category: str, target_date: str
 ) -> dict[str, Any]:
-    candidates = [item for item in documents if item.get("category") == category and item.get("target_date")]
-    exact = next((item for item in candidates if item.get("target_date") == target_date), None)
+    requested_target = valid_iso_date(target_date)
+    candidates: list[tuple[date, dict[str, Any]]] = []
+    for item in documents:
+        if item.get("category") != category:
+            continue
+        normalized = valid_iso_date(item.get("target_date"))
+        if normalized:
+            candidates.append((date.fromisoformat(normalized), item))
+    exact = next((item for parsed, item in candidates if parsed.isoformat() == requested_target), None)
     selected = exact or max(
         candidates,
-        key=lambda item: (str(item.get("target_date") or ""), str(item.get("date") or ""), str(item.get("mtime") or "")),
-        default=None,
-    )
+        key=lambda candidate: (
+            candidate[0],
+            str(candidate[1].get("date") or ""),
+            str(candidate[1].get("mtime") or ""),
+        ),
+        default=(None, None),
+    )[1]
+    selected_target = valid_iso_date((selected or {}).get("target_date"))
     return {
         "document": selected,
-        "target_date": str((selected or {}).get("target_date") or ""),
-        "stale": bool(selected and selected.get("target_date") != target_date),
+        "target_date": selected_target,
+        "stale": bool(selected and selected_target != requested_target),
     }
 
 
+def parse_pool_row(raw_line: str) -> list[str] | None:
+    if raw_line.count("|") < 2:
+        return None
+    row = next(csv.reader([raw_line.strip().strip("|")], delimiter="|"))
+    return [cell.strip() for cell in row]
+
+
+def pool_column_indices(row: list[str]) -> dict[str, int] | None:
+    columns: dict[str, int | None] = {}
+    for field, aliases in POOL_COLUMNS.items():
+        columns[field] = next((index for index, cell in enumerate(row) if cell in aliases), None)
+    if columns["stock_code"] is None or columns["stock_name"] is None:
+        return None
+    return {field: index for field, index in columns.items() if index is not None}
+
+
+def is_table_separator(row: list[str]) -> bool:
+    return bool(row) and all(re.fullmatch(r":?-{3,}:?", cell) for cell in row)
+
+
 def extract_research_pool_candidates(markdown_text: str) -> list[dict[str, str]]:
-    parsed: list[list[str]] = []
-    for raw_line in markdown_text.splitlines():
-        if raw_line.count("|") < 2:
-            continue
-        row = next(csv.reader([raw_line.strip().strip("|")], delimiter="|"))
-        parsed.append([cell.strip() for cell in row])
-    for header_index, header in enumerate(parsed):
-        columns: dict[str, int | None] = {}
-        for field, aliases in POOL_COLUMNS.items():
-            columns[field] = next((index for index, cell in enumerate(header) if cell in aliases), None)
-        if columns["stock_code"] is None or columns["stock_name"] is None:
+    lines = markdown_text.splitlines()
+    for header_index, raw_header in enumerate(lines):
+        header = parse_pool_row(raw_header)
+        columns = pool_column_indices(header or [])
+        if columns is None:
             continue
         output: list[dict[str, str]] = []
-        required_width = max(index for index in columns.values() if index is not None)
-        for row in parsed[header_index + 1 :]:
+        required_width = max(columns.values())
+        row_index = header_index + 1
+        while row_index < len(lines):
+            row = parse_pool_row(lines[row_index])
+            if row is None:
+                break
+            if pool_column_indices(row) is not None:
+                break
+            if is_table_separator(row):
+                row_index += 1
+                continue
             if len(row) <= required_width:
+                row_index += 1
                 continue
             code = row[columns["stock_code"]]
             name = row[columns["stock_name"]]
             if not re.fullmatch(r"\d{6}", code) or not name:
+                row_index += 1
                 continue
             output.append(
                 {
@@ -245,6 +305,7 @@ def extract_research_pool_candidates(markdown_text: str) -> list[dict[str, str]]
                     "buy_point": row[columns["buy_point"]] if columns["buy_point"] is not None else "待核验",
                 }
             )
+            row_index += 1
         return output
     return []
 
@@ -553,7 +614,7 @@ def build_data(
         """
         select
           count(*) as trade_rows,
-          count(distinct stock_code) as stock_count,
+          count(distinct case when stock_code glob '[0-9][0-9][0-9][0-9][0-9][0-9]' then stock_code end) as stock_count,
           round(sum(case when side = 'BUY' then amount else 0 end), 2) as buy_amount,
           round(sum(case when side = 'SELL' then amount else 0 end), 2) as sell_amount,
           round(sum(coalesce(commission,0) + coalesce(stamp_tax,0) + coalesce(transfer_fee,0) + coalesce(other_fee,0)), 2) as total_fees,
