@@ -261,6 +261,157 @@ class WorkbenchArtifactTest(unittest.TestCase):
         self.assertEqual(len(site.extract_research_pool_candidates(markdown)), 1)
 
 
+def gate(status: str, **overrides: object) -> dict[str, object]:
+    result: dict[str, object] = {
+        "status": status,
+        "target_date": None,
+        "reasons": [],
+        "next_check": "",
+        "source_path": "",
+    }
+    result.update(overrides)
+    return result
+
+
+class HomepageRendererTests(unittest.TestCase):
+    def test_gate_renderer_maps_all_statuses_to_published_copy(self) -> None:
+        expected = {
+            "pending": "待核验",
+            "locked": "风险锁定",
+            "observe": "仅观察",
+            "eligible": "可进入验证",
+        }
+        for status, copy in expected.items():
+            with self.subTest(status=status):
+                html = site.render_coach_state(
+                    {"trading_state": {"coach_gate": gate(status), "mode_eligibility": [], "modes": [], "error": None}}
+                )
+
+                self.assertIn(copy, html)
+
+    def test_gate_and_eligibility_render_reasons_dates_next_check_and_source(self) -> None:
+        html = site.render_coach_state(
+            {
+                "trading_state": {
+                    "coach_gate": gate(
+                        "observe",
+                        target_date="2026-07-12",
+                        reasons=["先处理持仓风险"],
+                        next_check="收盘后复核",
+                        source_path="reports/run-20260711/coach_note.md",
+                    ),
+                    "mode_eligibility": [
+                        {
+                            "mode_id": "mode-a",
+                            "status": "eligible",
+                            "target_date": "2026-07-13",
+                            "reasons": ["已有三次正式样本", '<先核验 & "边界"'],
+                            "source_path": "reports/run-20260712/mode_check.md",
+                        }
+                    ],
+                    "modes": [{"id": "mode-a", "name": "模式 A"}],
+                    "error": None,
+                }
+            }
+        )
+
+        self.assertIn("先处理持仓风险", html)
+        self.assertIn("收盘后复核", html)
+        self.assertIn("2026-07-12", html)
+        self.assertIn("模式 A", html)
+        self.assertIn("可进入验证", html)
+        self.assertIn("已有三次正式样本", html)
+        self.assertIn("&lt;先核验 &amp; &quot;边界&quot;", html)
+        self.assertIn("2026-07-13", html)
+        self.assertIn('href="reports/run-20260711/coach_note.md"', html)
+        self.assertIn('href="reports/run-20260712/mode_check.md"', html)
+
+    def test_discipline_renderer_shows_active_message_metadata_and_escapes_text(self) -> None:
+        html = site.render_discipline_feed(
+            {
+                "messages": [
+                    {
+                        "level": "red_card",
+                        "message": '<不要追涨 & "确认"',
+                        "created_at": "2026-07-12T09:30:00+08:00",
+                        "source_path": "reports/run-20260712/guard.md",
+                    }
+                ],
+                "error": None,
+            }
+        )
+
+        self.assertIn("红牌", html)
+        self.assertIn("2026-07-12T09:30:00+08:00", html)
+        self.assertIn("&lt;不要追涨 &amp; &quot;确认&quot;", html)
+        self.assertIn('href="reports/run-20260712/guard.md"', html)
+
+    def test_empty_and_error_states_are_rendered_explicitly(self) -> None:
+        empty_html = site.render_discipline_feed({"messages": [], "error": None})
+        error_html = site.render_discipline_feed({"messages": [], "error": "状态数据待修复：JSON 格式无效"})
+        coach_error_html = site.render_coach_state(
+            {"trading_state": {"coach_gate": gate("pending"), "mode_eligibility": [], "modes": [], "error": "坏状态"}}
+        )
+
+        self.assertIn("暂无已发布纪律消息", empty_html)
+        self.assertNotIn("状态数据待修复", empty_html)
+        self.assertIn("状态数据待修复", error_html)
+        self.assertNotIn("暂无已发布纪律消息", error_html)
+        self.assertIn("当前没有已发布的模式资格判断", coach_error_html)
+        self.assertIn("状态数据待修复", coach_error_html)
+
+    def test_unsafe_state_sources_are_plain_text_in_gate_eligibility_and_discipline(self) -> None:
+        unsafe_paths = (
+            "javascript:alert(1)",
+            "data:text/html,<p>bad</p>",
+            "https://example.com/source.md",
+            "//example.com/source.md",
+            "/absolute/source.md",
+            "../private/source.md",
+            "..\\private\\source.md",
+            "C:\\private\\source.md",
+        )
+        for unsafe_path in unsafe_paths:
+            with self.subTest(unsafe_path=unsafe_path):
+                state_html = site.render_coach_state(
+                    {
+                        "trading_state": {
+                            "coach_gate": gate("pending", source_path=unsafe_path),
+                            "mode_eligibility": [
+                                {
+                                    "mode_id": "mode-a",
+                                    "status": "observe",
+                                    "target_date": "2026-07-12",
+                                    "reasons": [],
+                                    "source_path": unsafe_path,
+                                }
+                            ],
+                            "modes": [{"id": "mode-a", "name": "模式 A"}],
+                            "error": None,
+                        }
+                    }
+                )
+                discipline_html = site.render_discipline_feed(
+                    {
+                        "messages": [
+                            {
+                                "level": "reminder",
+                                "message": "消息",
+                                "created_at": "2026-07-12T01:00:00+00:00",
+                                "source_path": unsafe_path,
+                            }
+                        ],
+                        "error": None,
+                    }
+                )
+                escaped_path = site.esc(unsafe_path)
+
+                self.assertNotIn(f'href="{escaped_path}"', state_html)
+                self.assertNotIn(f'href="{escaped_path}"', discipline_html)
+                self.assertIn(escaped_path, state_html)
+                self.assertIn(escaped_path, discipline_html)
+
+
 class SiteGenerationTests(unittest.TestCase):
     def test_write_site_generates_multiple_pages_and_unified_markdown_details(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -16,6 +16,7 @@ from datetime import date, datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from ledger_analytics import (
     broker_like_cycles,
@@ -838,11 +839,36 @@ GATE_COPY = {
 }
 
 
+def safe_relative_href(value: Any) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    normalized = raw
+    for _ in range(3):
+        decoded = unquote(normalized)
+        if decoded == normalized:
+            break
+        normalized = decoded
+    normalized = normalized.replace("\\", "/")
+    if normalized.startswith("/"):
+        return None
+    if re.match(r"^[A-Za-z]:", normalized):
+        return None
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", normalized):
+        return None
+    if any(part == ".." for part in normalized.split("/")):
+        return None
+    return raw
+
+
 def state_source_link(source_path: Any) -> str:
     source = str(source_path or "")
     if not source:
         return '<span class="state-source muted">暂无来源</span>'
-    return f'<a class="state-source mono" href="{esc(source)}">{esc(source)}</a>'
+    href = safe_relative_href(source)
+    if href is None:
+        return f'<span class="state-source mono">{esc(source)}</span>'
+    return f'<a class="state-source mono" href="{esc(href)}">{esc(source)}</a>'
 
 
 def state_reasons(reasons: Any) -> str:
@@ -945,7 +971,13 @@ def discipline_meta(message: dict[str, Any]) -> str:
     level = "红牌" if message.get("level") == "red_card" else "提醒"
     created_at = str(message.get("created_at") or "待核验")
     source = str(message.get("source_path") or "")
-    source_html = f'<a href="{esc(source)}">来源</a>' if source else "<span>暂无来源</span>"
+    href = safe_relative_href(source)
+    if href:
+        source_html = f'<a href="{esc(href)}">来源</a>'
+    elif source:
+        source_html = f'<span>来源：{esc(source)}</span>'
+    else:
+        source_html = "<span>暂无来源</span>"
     return f'<small><span>{level}</span><time class="mono">{esc(created_at)}</time>{source_html}</small>'
 
 
