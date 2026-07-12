@@ -29,20 +29,26 @@ async function inspect(name, viewport) {
   await page.screenshot({path: path.join(outputDir, `home-${name}.png`), fullPage: true});
 
   await page.goto(`${baseUrl}/ledger.html?grain=month&period=2026-07`, {waitUntil: 'networkidle'});
-  const ledgerTotal = await page.locator('[data-current-account-facts] .metric-primary > strong').textContent();
+  const ledgerAccountFact = () => page.locator('[data-current-account-facts] .metric-primary > strong').textContent();
+  const ledgerTotal = await ledgerAccountFact();
   await page.locator('[data-ledger-grain="custom"]').click();
   await page.locator('#ledgerFrom').fill('2026-07-01');
   await page.locator('#ledgerTo').fill('2026-07-10');
   await page.locator('[data-ledger-apply-custom]').click();
   const customUrlUpdated = page.url().includes('grain=custom') && page.url().includes('from=2026-07-01') && page.url().includes('to=2026-07-10');
+  const ledgerTotalAfterCustom = await ledgerAccountFact();
   await page.reload({waitUntil: 'networkidle'});
+  const ledgerTotalAfterCustomReload = await ledgerAccountFact();
   const customRestored = (await page.locator('#ledgerFrom').inputValue()) === '2026-07-01' && (await page.locator('#ledgerTo').inputValue()) === '2026-07-10';
   await page.goto(`${baseUrl}/ledger.html?grain=month&period=2026-07`, {waitUntil: 'networkidle'});
+  const ledgerTotalBeforeNavigation = await ledgerAccountFact();
   const monthLabel = await page.locator('[data-ledger-period-label]').textContent();
   await page.locator('[data-ledger-prev]').click();
   const urlChanged = page.url().includes('grain=month') && !page.url().includes('period=2026-07');
+  const ledgerTotalAfterPeriodNavigation = await ledgerAccountFact();
   await page.goBack();
   const historyRestored = (await page.locator('[data-ledger-period-label]').textContent()) === monthLabel;
+  const ledgerTotalAfterHistoryRestore = await ledgerAccountFact();
   await page.locator('#ledgerSearch').fill('300260');
   await page.waitForFunction(() => new URLSearchParams(location.search).get('q') === '300260');
   const searchUrlUpdated = page.url().includes('q=300260');
@@ -66,8 +72,17 @@ async function inspect(name, viewport) {
   await page.goto(`${baseUrl}/modes.html`, {waitUntil: 'networkidle'});
   await page.locator('[data-mode-filter="validating"]').click();
   const modeUrlUpdated = page.url().includes('status=validating');
+  const fixedAccountFacts = [
+    totalBefore,
+    ledgerTotal,
+    ledgerTotalAfterCustom,
+    ledgerTotalAfterCustomReload,
+    ledgerTotalBeforeNavigation,
+    ledgerTotalAfterPeriodNavigation,
+    ledgerTotalAfterHistoryRestore
+  ];
   return Object.assign({}, home, {
-    accountFactsFixed: totalBefore === ledgerTotal,
+    accountFactsFixed: fixedAccountFacts.every(value => value === totalBefore),
     customUrlUpdated,
     customRestored,
     urlChanged,
