@@ -225,7 +225,7 @@ python3 scripts/ledger_query.py stock --stock-code 301421
 生成账户事实报告：
 
 ```bash
-python3 scripts/account_report.py --html reports/account_report.html
+python3 scripts/account_report.py --json reports/account_report.json --md reports/account_report.md
 ```
 
 说明：
@@ -269,7 +269,7 @@ python3 scripts/pre_trade_guard.py \
   --invalidation "失效条件" \
   --stop-anchor "止损锚点" \
   --plan reports/run_YYYYMMDD_HHMMSS/trade_plan.md \
-  --html reports/pre_trade_guard.html
+  -o reports/pre_trade_guard.md
 ```
 
 该脚本只输出风控反问，不输出买卖结论。
@@ -299,7 +299,9 @@ python3 scripts/article_digest.py \
 
 ```bash
 reports/run_YYYYMMDD_HHMMSS/
-reports/account_report.html
+reports/account_report.md
+reports/account_report.json
+reports/personal_site/
 state/account_ledger.sqlite
 state/account_ledger.csv
 ```

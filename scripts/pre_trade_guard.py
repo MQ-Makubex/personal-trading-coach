@@ -105,7 +105,7 @@ def main() -> int:
     parser.add_argument("--stop-anchor", default="")
     parser.add_argument("--plan", type=Path, default=None)
     parser.add_argument("--state-dir", type=Path, default=STATE_DIR)
-    parser.add_argument("-o", "--output", type=Path, default=Path("reports/pre_trade_guard.md"))
+    parser.add_argument("-o", "--output", type=Path, default=Path("reports/intraday_guard.md"))
     parser.add_argument("--html", type=Path, default=None)
     args = parser.parse_args()
 

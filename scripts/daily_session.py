@@ -16,7 +16,6 @@ from init_state import DEFAULT_TEMPLATE_DIR, init_state
 from ledger_import import import_files
 from parse_pasted_trades import parse_text, write_csv
 from privacy_guard import scan_csv
-from render_markdown import build_html, render_markdown
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,12 +59,6 @@ def replace_date_and_run(text: str, trade_date: str, run_id: str) -> str:
 def copy_template(template_name: str, output: Path, trade_date: str, run_id: str) -> None:
     text = (TEMPLATES_DIR / template_name).read_text(encoding="utf-8")
     write_text(output, replace_date_and_run(text, trade_date, run_id))
-
-
-def render_to_html(markdown_path: Path, html_path: Path, title: str) -> None:
-    markdown_text = markdown_path.read_text(encoding="utf-8")
-    body = render_markdown(markdown_text)
-    write_text(html_path, build_html(title, body))
 
 
 def build_article_digest(args: argparse.Namespace, run_dir: Path, run_id: str) -> Path:
@@ -178,7 +171,7 @@ def build_session_index(run_dir: Path, run_id: str, trade_date: str, trades_csv:
         "2. 直接改写 `coach_note.md`，不要让脚本生成判断。",
         "3. 改写 `research_pool.md`，用户从中选不超过 3 支进入预案。",
         "4. 更新 `state/` 下的连续性文件。",
-        "5. 渲染 Markdown 为 HTML。",
+        "5. 运行 finalize_session 校验 Markdown，并刷新个人站。",
     ]
     output = run_dir / "index.md"
     write_text(output, "\n".join(lines) + "\n")
@@ -225,11 +218,6 @@ def prepare_session(args: argparse.Namespace) -> Path:
     copy_template("daily_session_prompt.md", run_dir / "daily_session_prompt.md", args.trade_date, run_id)
 
     index_md = build_session_index(run_dir, run_id, args.trade_date, trades_csv)
-    render_to_html(index_md, run_dir / "index.html", "盘后教练 Session")
-    render_to_html(run_dir / "coach_note.md", run_dir / "coach_note.html", "每日教练手记")
-    render_to_html(run_dir / "research_pool.md", run_dir / "research_pool.html", "明日研究股票池")
-    render_to_html(run_dir / "xueqiu_post.md", run_dir / "xueqiu_post.html", "雪球复盘草稿")
-
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest.update(
         {
@@ -246,7 +234,7 @@ def prepare_session(args: argparse.Namespace) -> Path:
             "research_pool": str(run_dir / "research_pool.md"),
             "trade_plan": str(run_dir / "trade_plan.md"),
             "xueqiu_post": str(run_dir / "xueqiu_post.md"),
-            "index_html": str(run_dir / "index.html"),
+            "index_markdown": str(index_md),
         }
     )
     write_text(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2))
@@ -280,7 +268,7 @@ def main() -> int:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     print(f"session: {run_dir}")
     print(f"privacy_status: {manifest.get('privacy_status')}")
-    print(f"index_html: {run_dir / 'index.html'}")
+    print(f"index_markdown: {run_dir / 'index.md'}")
     print(f"coach_note: {run_dir / 'coach_note.md'}")
     if manifest.get("privacy_status") == "failed":
         print("隐私检查失败：已停止底账导入。详情见 privacy_guard_report.json。")

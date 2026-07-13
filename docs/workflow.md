@@ -51,7 +51,7 @@ If the user asks a pure intraday discipline question before the close, a short g
 Local guard command:
 
 ```bash
-python3 scripts/pre_trade_guard.py --security "证券代码 证券名称" --action "拟执行动作" --trigger "触发条件" --invalidation "失效条件" --stop-anchor "止损锚点" --plan reports/run_*/trade_plan.md --html reports/pre_trade_guard.html
+python3 scripts/pre_trade_guard.py --security "证券代码 证券名称" --action "拟执行动作" --trigger "触发条件" --invalidation "失效条件" --stop-anchor "止损锚点" --plan reports/run_*/trade_plan.md -o reports/intraday_guard.md
 ```
 
 ## Research Pool Evolution
@@ -126,7 +126,7 @@ python3 scripts/ledger_query.py pnl-by-stock
 python3 scripts/ledger_query.py fifo-realized
 python3 scripts/ledger_query.py fifo-pnl-by-stock
 python3 scripts/ledger_query.py stock --stock-code 301421
-python3 scripts/account_report.py --html reports/account_report.html
+python3 scripts/account_report.py --json reports/account_report.json --md reports/account_report.md
 ```
 
 `cash-diff` is a cash-flow view, not realized PnL when positions remain open.
@@ -197,9 +197,16 @@ After the coach has rewritten `coach_note.md`, `research_pool.md`, and `xueqiu_p
 python3 scripts/finalize_session.py reports/run_YYYYMMDD_HHMMSS --strict
 ```
 
+The session keeps Markdown as its canonical output. `finalize_session.py` does
+not create per-document HTML files; after validation it refreshes
+`reports/personal_site/`. Read the handoff from the personal site: the latest
+coach note, trade plan, and research pool appear on the coach desk, while all
+other Markdown artifacts are available in the training timeline and linked
+stock stories.
+
 The finalizer:
 
-- renders Markdown files to HTML;
+- validates Markdown and refreshes the personal site only when validation passes;
 - creates `state_update_checklist.md`;
 - checks required coach-note sections;
 - warns if template placeholders remain;

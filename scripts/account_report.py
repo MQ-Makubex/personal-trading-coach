@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 from ledger_analytics import fifo_analytics
-from render_markdown import build_html, render_markdown
 
 
 DEFAULT_SQLITE = Path("state/account_ledger.sqlite")
@@ -256,7 +255,6 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--json", type=Path, default=Path("reports/account_report.json"))
     parser.add_argument("--md", type=Path, default=Path("reports/account_report.md"))
-    parser.add_argument("--html", type=Path, default=Path("reports/account_report.html"))
     args = parser.parse_args()
 
     with connect(args.sqlite) as conn:
@@ -265,14 +263,11 @@ def main() -> int:
     report["sqlite"] = str(args.sqlite)
     args.json.parent.mkdir(parents=True, exist_ok=True)
     args.md.parent.mkdir(parents=True, exist_ok=True)
-    args.html.parent.mkdir(parents=True, exist_ok=True)
     args.json.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     md = markdown(report)
     args.md.write_text(md, encoding="utf-8")
-    args.html.write_text(build_html("账户表现事实报告", render_markdown(md)), encoding="utf-8")
     print(f"account_report_json: {args.json}")
     print(f"account_report_md: {args.md}")
-    print(f"account_report_html: {args.html}")
     return 0
 
 

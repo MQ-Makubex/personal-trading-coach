@@ -220,7 +220,7 @@ def main() -> int:
     print(f"run_id: {rid}")
     print(f"private_inputs: {private_run_dir}")
     print(f"run_dir: {run_dir}")
-    print(f"index_html: {run_dir / 'index.html'}")
+    print(f"index_markdown: {run_dir / 'index.md'}")
     print(f"next_finalize: python3 scripts/finalize_session.py {run_dir} --strict")
     return 0
 

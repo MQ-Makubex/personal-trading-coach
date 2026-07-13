@@ -11,21 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from build_personal_site import write_site as write_personal_site
-from render_markdown import build_html, render_markdown
 
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES_DIR = ROOT / "templates"
-
-RENDER_TARGETS = {
-    "index.md": ("index.html", "盘后教练 Session"),
-    "coach_note.md": ("coach_note.html", "每日教练手记"),
-    "coach_lens_check.md": ("coach_lens_check.html", "教练镜头检查"),
-    "research_pool.md": ("research_pool.html", "明日研究股票池"),
-    "trade_plan.md": ("trade_plan.html", "明日交易预案"),
-    "xueqiu_post.md": ("xueqiu_post.html", "雪球复盘草稿"),
-    "state_update_checklist.md": ("state_update_checklist.html", "状态更新清单"),
-}
 
 REQUIRED_COACH_NOTE_HEADINGS = [
     "今日一句话定性",
@@ -97,11 +86,6 @@ def ensure_state_update_checklist(run_dir: Path, trade_date: str, overwrite: boo
     text = template.replace("YYYY-MM-DD", trade_date or "YYYY-MM-DD").replace("RUN_ID", run_id_from_dir(run_dir))
     write_text(output, text)
     return output
-
-
-def render_file(markdown_path: Path, html_path: Path, title: str) -> None:
-    markdown_text = markdown_path.read_text(encoding="utf-8")
-    write_text(html_path, build_html(title, render_markdown(markdown_text)))
 
 
 def line_is_safe_negation(line: str) -> bool:
@@ -195,36 +179,30 @@ def finalize(args: argparse.Namespace) -> dict[str, Any]:
     trade_date = args.trade_date or trade_date_from_manifest(run_dir)
     checklist = ensure_state_update_checklist(run_dir, trade_date, overwrite=args.overwrite_checklist)
 
-    rendered: list[str] = []
-    for markdown_name, (html_name, title) in RENDER_TARGETS.items():
-        markdown_path = run_dir / markdown_name
-        if not markdown_path.exists():
-            continue
-        render_file(markdown_path, run_dir / html_name, title)
-        rendered.append(str(run_dir / html_name))
-
     report = validate_session(run_dir)
     report.update(
         {
             "run_dir": str(run_dir),
             "trade_date": trade_date,
             "state_update_checklist": str(checklist),
-            "rendered_html": rendered,
+            "markdown_outputs": sorted(str(path) for path in run_dir.glob("*.md")),
         }
     )
     write_text(run_dir / "finalize_report.json", json.dumps(report, ensure_ascii=False, indent=2))
-    if not getattr(args, "skip_personal_site", False):
+    if report["status"] == "ok" and not getattr(args, "skip_personal_site", False):
         try:
             personal_site = write_personal_site()
             report["personal_site"] = {key: str(value) for key, value in personal_site.items()}
         except Exception as exc:  # Personal site refresh should not hide the session validation result.
             report["personal_site_error"] = str(exc)
-        write_text(run_dir / "finalize_report.json", json.dumps(report, ensure_ascii=False, indent=2))
+    elif report["status"] != "ok":
+        report["personal_site_skipped"] = "session validation failed"
+    write_text(run_dir / "finalize_report.json", json.dumps(report, ensure_ascii=False, indent=2))
     return report
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="验证并渲染一次盘后教练 session。")
+    parser = argparse.ArgumentParser(description="验证一次盘后教练 Markdown session，并刷新个人站。")
     parser.add_argument("run_dir", type=Path)
     parser.add_argument("--trade-date", default="")
     parser.add_argument("--overwrite-checklist", action="store_true")
@@ -235,7 +213,7 @@ def main() -> int:
     report = finalize(args)
     print(f"finalize_status: {report['status']}")
     print(f"finalize_report: {Path(args.run_dir) / 'finalize_report.json'}")
-    print(f"rendered_html_count: {len(report['rendered_html'])}")
+    print(f"markdown_output_count: {len(report['markdown_outputs'])}")
     if report.get("personal_site"):
         print(f"personal_site: {report['personal_site']['site']}")
     if report.get("personal_site_error"):
