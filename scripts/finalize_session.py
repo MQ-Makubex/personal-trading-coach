@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from build_personal_site import write_site as write_personal_site
 from render_markdown import build_html, render_markdown
 
 
@@ -212,6 +213,13 @@ def finalize(args: argparse.Namespace) -> dict[str, Any]:
         }
     )
     write_text(run_dir / "finalize_report.json", json.dumps(report, ensure_ascii=False, indent=2))
+    if not getattr(args, "skip_personal_site", False):
+        try:
+            personal_site = write_personal_site()
+            report["personal_site"] = {key: str(value) for key, value in personal_site.items()}
+        except Exception as exc:  # Personal site refresh should not hide the session validation result.
+            report["personal_site_error"] = str(exc)
+        write_text(run_dir / "finalize_report.json", json.dumps(report, ensure_ascii=False, indent=2))
     return report
 
 
@@ -220,6 +228,7 @@ def main() -> int:
     parser.add_argument("run_dir", type=Path)
     parser.add_argument("--trade-date", default="")
     parser.add_argument("--overwrite-checklist", action="store_true")
+    parser.add_argument("--skip-personal-site", action="store_true", help="不刷新 reports/personal_site。")
     parser.add_argument("--strict", action="store_true", help="warnings 也视为失败。")
     args = parser.parse_args()
 
@@ -227,6 +236,10 @@ def main() -> int:
     print(f"finalize_status: {report['status']}")
     print(f"finalize_report: {Path(args.run_dir) / 'finalize_report.json'}")
     print(f"rendered_html_count: {len(report['rendered_html'])}")
+    if report.get("personal_site"):
+        print(f"personal_site: {report['personal_site']['site']}")
+    if report.get("personal_site_error"):
+        print(f"personal_site_error: {report['personal_site_error']}")
     if report["errors"]:
         print(f"errors: {len(report['errors'])}")
     if report["warnings"]:

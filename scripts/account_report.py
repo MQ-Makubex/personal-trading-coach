@@ -79,18 +79,49 @@ def collect(conn: sqlite3.Connection, limit: int) -> dict[str, Any]:
         "by_stock": rows(
             conn,
             """
+            with trade_cash as (
+              select
+                stock_code,
+                coalesce(max(case when stock_name not like 'XD%' then stock_name end), max(stock_name)) as stock_name,
+                count(*) as trade_rows,
+                sum(case when side = 'BUY' then 1 else 0 end) as buy_rows,
+                sum(case when side = 'SELL' then 1 else 0 end) as sell_rows,
+                round(sum(case when side = 'BUY' then amount else 0 end), 2) as buy_amount,
+                round(sum(case when side = 'SELL' then amount else 0 end), 2) as sell_amount,
+                round(sum(coalesce(commission,0) + coalesce(stamp_tax,0) + coalesce(transfer_fee,0) + coalesce(other_fee,0)), 2) as fees,
+                round(sum(coalesce(net_amount,0)), 2) as trade_cash_difference
+              from trades
+              group by stock_code
+            ),
+            adjustment_cash as (
+              select
+                stock_code,
+                coalesce(max(case when stock_name not like 'XD%' then stock_name end), max(stock_name)) as stock_name,
+                count(*) as cash_adjustment_rows,
+                round(sum(coalesce(net_amount,0)), 2) as cash_adjustment_amount
+              from cash_adjustments
+              group by stock_code
+            ),
+            all_codes as (
+              select stock_code from trade_cash
+              union
+              select stock_code from adjustment_cash
+            )
             select
-              stock_code,
-              stock_name,
-              count(*) as trade_rows,
-              sum(case when side = 'BUY' then 1 else 0 end) as buy_rows,
-              sum(case when side = 'SELL' then 1 else 0 end) as sell_rows,
-              round(sum(case when side = 'BUY' then amount else 0 end), 2) as buy_amount,
-              round(sum(case when side = 'SELL' then amount else 0 end), 2) as sell_amount,
-              round(sum(coalesce(commission,0) + coalesce(stamp_tax,0) + coalesce(transfer_fee,0) + coalesce(other_fee,0)), 2) as fees,
-              round(sum(case when side = 'SELL' then amount else 0 end) - sum(case when side = 'BUY' then amount else 0 end) - sum(coalesce(commission,0) + coalesce(stamp_tax,0) + coalesce(transfer_fee,0) + coalesce(other_fee,0)), 2) as cash_difference_not_realized_pnl
-            from trades
-            group by stock_code, stock_name
+              c.stock_code,
+              coalesce(t.stock_name, a.stock_name) as stock_name,
+              coalesce(t.trade_rows, 0) as trade_rows,
+              coalesce(t.buy_rows, 0) as buy_rows,
+              coalesce(t.sell_rows, 0) as sell_rows,
+              coalesce(t.buy_amount, 0) as buy_amount,
+              coalesce(t.sell_amount, 0) as sell_amount,
+              coalesce(t.fees, 0) as fees,
+              coalesce(a.cash_adjustment_rows, 0) as cash_adjustment_rows,
+              coalesce(a.cash_adjustment_amount, 0) as cash_adjustment_amount,
+              round(coalesce(t.trade_cash_difference, 0) + coalesce(a.cash_adjustment_amount, 0), 2) as cash_difference_not_realized_pnl
+            from all_codes c
+            left join trade_cash t on t.stock_code = c.stock_code
+            left join adjustment_cash a on a.stock_code = c.stock_code
             order by trade_rows desc, abs(cash_difference_not_realized_pnl) desc
             limit ?
             """,
@@ -140,9 +171,11 @@ def collect(conn: sqlite3.Connection, limit: int) -> dict[str, Any]:
         ),
     }
     analytics = fifo_analytics(conn)
-    report["realized_by_stock"] = analytics["realized_by_stock"][:limit]
+    report["broker_like_realized_by_stock"] = analytics["broker_like_realized_by_stock"][:limit]
+    report["broker_like_realized_lots"] = analytics["broker_like_realized_lots"][:limit]
+    report["fifo_realized_by_stock"] = analytics["realized_by_stock"][:limit]
     report["open_positions"] = analytics["open_positions"][:limit]
-    report["realized_lots"] = analytics["realized_lots"][:limit]
+    report["fifo_realized_lots"] = analytics["realized_lots"][:limit]
     return report
 
 
@@ -180,11 +213,11 @@ def markdown(report: dict[str, Any]) -> str:
         "",
         *table(report["by_stock"]),
         "",
-        "## FIFO 已实现盈亏",
+        "## 券商成本口径已实现盈亏",
         "",
-        "已实现盈亏按先进先出估算，买入成本包含买入费用，卖出收入扣除卖出费用；若历史数据不完整，`unmatched_sell_quantity` 会提示存在无法匹配的卖出。",
+        "本节按卖出前的券商滚动持仓成本估算：买入增加成本，卖出用卖出净额冲减成本；清仓后的盈亏残差只在同日回补时继续影响显示成本，隔日重新开仓重置。此口径用于教练手记和个人站主展示。",
         "",
-        *table(report["realized_by_stock"]),
+        *table(report["broker_like_realized_by_stock"]),
         "",
         "## 当前剩余仓位成本",
         "",
@@ -192,9 +225,19 @@ def markdown(report: dict[str, Any]) -> str:
         "",
         *table(report["open_positions"]),
         "",
-        "## 最近已闭合批次",
+        "## 最近券商口径平仓批次",
         "",
-        *table(report["realized_lots"]),
+        *table(report["broker_like_realized_lots"]),
+        "",
+        "## FIFO 已实现盈亏审计",
+        "",
+        "本节保留先进先出估算用于审计，不作为教练手记和个人站主展示口径。买入成本包含买入费用，卖出收入扣除卖出费用；若历史数据不完整，`unmatched_sell_quantity` 会提示存在无法匹配的卖出。",
+        "",
+        *table(report["fifo_realized_by_stock"]),
+        "",
+        "## 最近 FIFO 闭合批次",
+        "",
+        *table(report["fifo_realized_lots"]),
         "",
         "## 日内同票买卖候选",
         "",

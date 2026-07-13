@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import math
 import re
@@ -23,6 +24,7 @@ SINA_INDEX_SYMBOLS = {
 
 EASTMONEY_FIELDS = "f12,f14,f2,f3,f5,f6,f20,f21,f62"
 EASTMONEY_UT = "bd1d9ddb04089700cf9c27f6f7426281"
+MARKET_CACHE_DIR = Path("reports/market_cache")
 
 
 def request_text(url: str, encoding: str = "utf-8", timeout: int = 10) -> str:
@@ -49,7 +51,7 @@ def to_float(value: Any) -> float | None:
     try:
         if value in (None, "", "-"):
             return None
-        number = float(value)
+        number = float(str(value).replace(",", ""))
         if math.isnan(number):
             return None
         return number
@@ -131,6 +133,44 @@ def eastmoney_clist(fs: str, fid: str, limit: int) -> tuple[list[dict[str, Any]]
     return rows, url
 
 
+def fetch_ths_industry_summary(limit: int) -> tuple[list[dict[str, Any]], str]:
+    errors: list[str] = []
+    for _attempt in range(3):
+        try:
+            akshare = importlib.import_module("akshare")
+            frame = akshare.stock_board_industry_summary_ths()
+            rows: list[dict[str, Any]] = []
+            for _, item in frame.iterrows():
+                rows.append(
+                    {
+                        "code": "",
+                        "name": str(item.get("板块") or ""),
+                        "price": to_float(item.get("均价")),
+                        "change_pct": to_float(item.get("涨跌幅")),
+                        "volume": to_float(item.get("总成交量")),
+                        "amount": to_float(item.get("总成交额")),
+                        "main_net_inflow": to_float(item.get("净流入")),
+                        "up_count": to_float(item.get("上涨家数")),
+                        "down_count": to_float(item.get("下跌家数")),
+                        "leader": str(item.get("领涨股") or ""),
+                        "leader_change_pct": to_float(item.get("领涨股-涨跌幅")),
+                        "provider": "akshare_ths_industry_summary",
+                    }
+                )
+            rows.sort(key=lambda row: row.get("change_pct") if row.get("change_pct") is not None else -999, reverse=True)
+            MARKET_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            (MARKET_CACHE_DIR / "ths_industry_summary.json").write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+            return rows[:limit], "akshare.stock_board_industry_summary_ths"
+        except Exception as exc:  # noqa: BLE001 - retry then cache fallback.
+            errors.append(f"{exc.__class__.__name__}: {exc}")
+
+    cache = MARKET_CACHE_DIR / "ths_industry_summary.json"
+    if cache.exists():
+        rows = json.loads(cache.read_text(encoding="utf-8"))
+        return rows[:limit], "cache.akshare.stock_board_industry_summary_ths"
+    raise RuntimeError("; ".join(errors))
+
+
 def summarize_breadth(rows: list[dict[str, Any]]) -> dict[str, Any]:
     valid = [row for row in rows if row.get("change_pct") is not None]
     up = sum(1 for row in valid if (row.get("change_pct") or 0) > 0)
@@ -142,6 +182,20 @@ def summarize_breadth(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "down": down,
         "flat": flat,
         "up_ratio": round(up / len(valid) * 100, 2) if valid else None,
+    }
+
+
+def summarize_sector_breadth(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    up = sum(int(row.get("up_count") or 0) for row in rows)
+    down = sum(int(row.get("down_count") or 0) for row in rows)
+    total = up + down
+    return {
+        "total": total,
+        "up": up,
+        "down": down,
+        "flat": None,
+        "up_ratio": round(up / total * 100, 2) if total else None,
+        "provider": "sector_constituent_aggregate",
     }
 
 
@@ -199,9 +253,20 @@ def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         snapshot["sector_weakness"] = list(reversed(industries[-min(10, len(industries)) :]))
         snapshot["data_sources"].append(source)
     except Exception as exc:  # noqa: BLE001
-        snapshot["status"] = "partial"
-        snapshot["verified"] = False
-        snapshot["notes"].append(f"行业板块抓取失败：{exc.__class__.__name__}")
+        snapshot["notes"].append(f"Eastmoney 行业板块抓取失败：{exc.__class__.__name__}")
+        try:
+            industries, source = fetch_ths_industry_summary(args.sector_limit)
+            snapshot["sector_strength"] = industries[: min(10, len(industries))]
+            snapshot["sector_weakness"] = list(reversed(industries[-min(10, len(industries)) :]))
+            if not snapshot.get("market_breadth") and any(row.get("up_count") is not None for row in industries):
+                snapshot["market_breadth"] = summarize_sector_breadth(industries)
+                snapshot["notes"].append("市场宽度已使用同花顺行业成分涨跌家数聚合近似。")
+            snapshot["data_sources"].append(source)
+            snapshot["notes"].append("行业板块已使用同花顺行业汇总 fallback。")
+        except Exception as fallback_exc:  # noqa: BLE001
+            snapshot["status"] = "partial"
+            snapshot["verified"] = False
+            snapshot["notes"].append(f"行业板块 fallback 抓取失败：{fallback_exc.__class__.__name__}")
 
     if snapshot["status"] == "partial":
         snapshot["notes"].append("市场背景部分联网验证；缺失项不得硬编。")
@@ -224,7 +289,12 @@ def markdown(snapshot: dict[str, Any]) -> str:
         lines.append(f"| {row.get('name','')} | {row.get('price','')} | {row.get('change_pct','')} | {row.get('quote_time','')} |")
     lines.extend(["", "## 市场宽度", "", json.dumps(snapshot.get("market_breadth", {}), ensure_ascii=False, indent=2), "", "## 强势板块", ""])
     for row in snapshot.get("sector_strength", [])[:10]:
-        lines.append(f"- {row.get('name')}：{row.get('change_pct')}%")
+        extra = ""
+        if row.get("main_net_inflow") is not None:
+            extra += f"，净流入 {row.get('main_net_inflow')}"
+        if row.get("leader"):
+            extra += f"，领涨 {row.get('leader')}"
+        lines.append(f"- {row.get('name')}：{row.get('change_pct')}%{extra}")
     lines.extend(["", "## 弱势板块", ""])
     for row in snapshot.get("sector_weakness", [])[:10]:
         lines.append(f"- {row.get('name')}：{row.get('change_pct')}%")

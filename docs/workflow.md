@@ -20,12 +20,21 @@ The main artifact is a coach-written Markdown note. Scripts support the coach by
 1. Build or update the evidence packet from sanitized trade facts and user context.
 2. Read `CONTEXT.md`, open position storylines, coach memory, personal trading modes, decision events, and the latest research-pool protocol.
 3. Write the daily coach note directly in Markdown using `templates/coach_note.md`.
-4. Draft position-storyline updates: identify whether each action continued a plan, corrected an error, increased risk, or showed emotional deformation.
-5. Draft personal-trading-mode updates conservatively. A single profitable trade cannot become a reusable mode.
-6. Draft coach-memory updates with recurring execution errors, emotional triggers, and training focus.
-7. Build tomorrow's research pool using `templates/research_pool.md`.
-8. Write a Xueqiu-ready review and tomorrow plan draft using `templates/xueqiu_post.md`.
-9. Render Markdown artifacts to HTML for reading.
+4. Review yesterday's research pool against today's market and user actions.
+5. Draft position-storyline updates: identify whether each action continued a plan, corrected an error, increased risk, or showed emotional deformation.
+6. Draft personal-trading-mode updates conservatively. A single profitable trade cannot become a reusable mode.
+7. Draft coach-memory updates with recurring execution errors, emotional triggers, and training focus.
+8. Build tomorrow's research pool using `templates/research_pool.md`.
+9. Write a Xueqiu-ready review and tomorrow plan draft using `templates/xueqiu_post.md`.
+10. Render Markdown artifacts to HTML for reading.
+
+When the user pastes post-market trades, broker tables, or a same-day trading journal, the minimum required output set is:
+
+- today's coach note;
+- yesterday research-pool validation;
+- tomorrow research pool.
+
+If the user asks a pure intraday discipline question before the close, a short guard response is acceptable. Once final or near-final trade facts are pasted after the session, the full post-market output set is mandatory.
 
 ## Pre-Market And Intraday Coach Flow
 
@@ -51,6 +60,12 @@ The research pool is not a recommendation list. It is a training surface for pat
 
 Each research-pool iteration should record:
 
+- macro facts and market-impact assumptions;
+- industry/policy and US-market mapping;
+- index structure and breadth;
+- theme strength, rotation, and risk appetite;
+- individual-stock evidence;
+- buy-point design and invalidation;
 - current market regime assumption;
 - candidate baskets;
 - inclusion rules;
@@ -78,7 +93,8 @@ Historical broker statements should be sanitized, parsed, deduplicated, and merg
 - total commission and fees by period;
 - trading frequency by day, week, month, and stock;
 - realized PnL by stock and period;
-- FIFO realized PnL by matched lots;
+- broker-like rolling-cost realized PnL for user-facing reports;
+- FIFO realized PnL by matched lots for audit;
 - remaining position quantity and cost basis inferred from trade facts;
 - repeated loss patterns;
 - holding period distribution;
@@ -107,12 +123,16 @@ python3 scripts/ledger_query.py cash-diff
 python3 scripts/ledger_query.py realized
 python3 scripts/ledger_query.py positions
 python3 scripts/ledger_query.py pnl-by-stock
+python3 scripts/ledger_query.py fifo-realized
+python3 scripts/ledger_query.py fifo-pnl-by-stock
 python3 scripts/ledger_query.py stock --stock-code 301421
 python3 scripts/account_report.py --html reports/account_report.html
 ```
 
 `cash-diff` is a cash-flow view, not realized PnL when positions remain open.
-`realized` and `pnl-by-stock` use FIFO matching: buy cost includes buy-side fees, and sell proceeds deduct sell-side fees. If historical data starts after a position was already opened, unmatched sells are flagged instead of being forced into false PnL.
+`realized` and `pnl-by-stock` use the broker-like rolling-cost basis for user-facing coach notes, account reports, and the personal cockpit: buys add cost, sells deduct net proceeds, same-day re-entry carries the closed-position residual into display cost, and next-day re-entry resets after a flat close.
+Security-level cash adjustments such as dividends and dividend-tax adjustments are added to stock total PnL. Account-level flows such as bank/security transfers and interest capitalization are excluded from stock PnL.
+`fifo-realized` and `fifo-pnl-by-stock` are audit views: buy cost includes buy-side fees, and sell proceeds deduct sell-side fees. If historical data starts after a position was already opened, unmatched sells are flagged instead of being forced into false PnL.
 
 For historical CSV/XLSX exports:
 

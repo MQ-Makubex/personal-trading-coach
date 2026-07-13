@@ -28,6 +28,17 @@ OUTPUT_FIELDS = [
     "other_fee",
 ]
 
+CASH_ADJUSTMENT_FIELDS = [
+    "trade_date",
+    "trade_time",
+    "stock_code",
+    "stock_name",
+    "category",
+    "quantity",
+    "price",
+    "net_amount",
+]
+
 FIELD_ALIASES = {
     "trade_date": ["发生日期", "成交日期", "交易日期"],
     "trade_time": ["发生时间", "成交时间", "委托时间"],
@@ -46,6 +57,7 @@ FIELD_ALIASES = {
 }
 
 REQUIRED_FIELDS = ["trade_date", "side", "stock_code", "stock_name", "quantity", "price"]
+SECURITY_CASH_KEYWORDS = ("红利", "股息", "派息", "扣税")
 
 
 def normalize_text(value: object) -> str:
@@ -148,13 +160,39 @@ def row_to_record(row: list[str], mapping: dict[str, int]) -> dict[str, str] | N
     }
 
 
-def extract_rows_from_pdf(pdf_path: Path) -> tuple[list[dict[str, str]], dict[str, Any]]:
+def row_to_cash_adjustment(row: list[str], mapping: dict[str, int]) -> dict[str, str] | None:
+    category = cell_at(row, mapping.get("side"))
+    stock_code = cell_at(row, mapping.get("stock_code"))
+    stock_name = cell_at(row, mapping.get("stock_name"))
+    net_amount = clean_number(cell_at(row, mapping.get("net_amount")))
+
+    if not any(keyword in category for keyword in SECURITY_CASH_KEYWORDS):
+        return None
+    if not re.fullmatch(r"\d{6}", stock_code or ""):
+        return None
+    if not stock_name or not net_amount:
+        return None
+
+    return {
+        "trade_date": cell_at(row, mapping.get("trade_date")),
+        "trade_time": cell_at(row, mapping.get("trade_time")),
+        "stock_code": stock_code,
+        "stock_name": stock_name,
+        "category": category,
+        "quantity": clean_number(cell_at(row, mapping.get("quantity"))),
+        "price": clean_number(cell_at(row, mapping.get("price"))),
+        "net_amount": net_amount,
+    }
+
+
+def extract_rows_from_pdf(pdf_path: Path) -> tuple[list[dict[str, str]], list[dict[str, str]], dict[str, Any]]:
     try:
         import pdfplumber  # type: ignore
     except ImportError as exc:
         raise RuntimeError("缺少 pdfplumber。请在本地安装 pdfplumber 后重试；本脚本不会联网。") from exc
 
     rows: list[dict[str, str]] = []
+    cash_adjustments: list[dict[str, str]] = []
     mappings_seen: list[dict[str, Any]] = []
     table_count = 0
     pages_with_tables = 0
@@ -188,8 +226,12 @@ def extract_rows_from_pdf(pdf_path: Path) -> tuple[list[dict[str, str]], dict[st
                     record = row_to_record(row, current_mapping)
                     if record:
                         rows.append(record)
+                        continue
+                    adjustment = row_to_cash_adjustment(row, current_mapping)
+                    if adjustment:
+                        cash_adjustments.append(adjustment)
 
-    return rows, {
+    return rows, cash_adjustments, {
         "page_count": page_count,
         "pages_with_tables": pages_with_tables,
         "table_count": table_count,
@@ -242,6 +284,14 @@ def write_csv(rows: list[dict[str, str]], output_path: Path) -> None:
         writer.writerows({field: row.get(field, "") for field in OUTPUT_FIELDS} for row in rows)
 
 
+def write_cash_adjustments_csv(rows: list[dict[str, str]], output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=CASH_ADJUSTMENT_FIELDS)
+        writer.writeheader()
+        writer.writerows({field: row.get(field, "") for field in CASH_ADJUSTMENT_FIELDS} for row in rows)
+
+
 def write_report(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -251,6 +301,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="从本地文字型 PDF 交割单提取脱敏标准交易 CSV。")
     parser.add_argument("pdf_file", type=Path)
     parser.add_argument("-o", "--output", type=Path, default=Path("reports/sanitized_pdf_trades.csv"))
+    parser.add_argument("--cash-adjustments-output", type=Path)
     parser.add_argument("--report", type=Path, default=Path("reports/sanitize_pdf_report.json"))
     args = parser.parse_args()
 
@@ -264,13 +315,13 @@ def main() -> int:
         "warnings": [],
         "privacy": [
             "未在终端打印 PDF 原文。",
-            "只输出标准交易字段。",
+            "只输出标准交易字段和证券相关现金调整字段。",
             "资金余额字段默认删除，不进入输出 CSV。",
         ],
     }
 
     try:
-        rows, meta = extract_rows_from_pdf(args.pdf_file)
+        rows, cash_adjustments, meta = extract_rows_from_pdf(args.pdf_file)
         report.update(meta)
     except Exception as exc:  # noqa: BLE001
         report["status"] = "error"
@@ -288,8 +339,15 @@ def main() -> int:
         return 2
 
     write_csv(rows, args.output)
+    if args.cash_adjustments_output:
+        write_cash_adjustments_csv(cash_adjustments, args.cash_adjustments_output)
     findings = scan_sensitive_output(args.output)
+    if args.cash_adjustments_output:
+        findings.extend(scan_sensitive_output(args.cash_adjustments_output))
     report["rows_extracted"] = len(rows)
+    report["cash_adjustment_rows_extracted"] = len(cash_adjustments)
+    if args.cash_adjustments_output:
+        report["cash_adjustments_output_file"] = str(args.cash_adjustments_output)
     report["sensitive_scan_findings"] = findings
     if findings:
         report["status"] = "blocked_sensitive_data"

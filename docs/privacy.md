@@ -65,13 +65,13 @@ Confirm no real trading data, no raw statement, no account identifier, and no ca
 ## Script Boundary
 
 - `scripts/parse_pasted_trades.py` reads raw pasted text only from an ignored private path and emits standard trade facts.
-- `scripts/sanitize_pdf_statement.py` extracts only sanitized trade facts from local text-based PDFs; it does not print PDF text and does not store the raw PDF in the repository.
+- `scripts/sanitize_pdf_statement.py` extracts sanitized trade facts and security-level cash adjustments from local text-based PDFs; it does not print PDF text and does not store the raw PDF in the repository.
 - `scripts/normalize_statement.py` normalizes broker CSV/XLSX exports into standard trade facts; XLSX support requires optional `openpyxl`.
 - `scripts/daily_prepare.py` copies daily user inputs into ignored private run input files and prepares one local session.
 - `scripts/privacy_guard.py` must run before trade facts enter the ledger.
-- `scripts/ledger_import.py` accepts only standard trade-fact CSV files that have passed privacy checks.
+- `scripts/ledger_import.py` accepts only standard trade-fact CSV files and security-level cash-adjustment CSV files that have passed privacy checks.
 - `scripts/ledger_query.py` answers factual ledger questions only.
-- `scripts/ledger_analytics.py` computes FIFO realized PnL, open position cost basis, and matched holding days from sanitized trade facts only.
+- `scripts/ledger_analytics.py` computes broker-like rolling-cost realized PnL for user-facing reports, security-cash-adjusted stock total PnL, FIFO audit PnL, open position cost basis, and matched holding days from sanitized trade facts only.
 - `scripts/build_evidence_packet.py` creates coach-readable evidence; the coach still writes the judgment directly.
 - `scripts/daily_session.py` prepares one ignored run directory with evidence, prompts, drafts, and rendered placeholders.
 - `scripts/pre_trade_guard.py` creates plan-consistency and red-card questions for pre-trade or intraday use.

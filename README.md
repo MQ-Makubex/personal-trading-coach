@@ -11,7 +11,7 @@
 - 标准化 CSV/XLSX 历史交割单。
 - 检查姓名、身份证、手机号、资金账号、客户号、股东账号、银行卡、地址、资金余额等敏感信息。
 - 维护本地历史交易底账。
-- 查询手续费、交易频率、日内同票买卖、FIFO 已实现盈亏、剩余仓位成本。
+- 查询手续费、交易频率、日内同票买卖、券商成本口径已实现盈亏、FIFO 审计盈亏、剩余仓位成本。
 - 生成盘后教练证据包。
 - 辅助写每日教练手记、明日研究股票池、交易预案、雪球复盘草稿。
 - 做文章观点摘要和叙事污染检查。
@@ -47,13 +47,20 @@ state/
 - SQLite 账本；
 - 任何姓名、身份证、手机号、资金账号、客户号、股东账号、银行卡、营业部、地址、资金余额。
 
-长期账本只保存标准交易事实：
+长期账本只保存标准交易事实，以及带证券代码的现金调整事实：
 
 - 日期、时间；
 - 证券代码、证券名称；
 - 买卖方向；
 - 数量、价格、成交额、净发生额；
 - 佣金、印花税、过户费、其他费用。
+- 红利入账、股息红利差异扣税等证券相关现金调整。
+
+不进入单票盈亏：
+
+- 银证转账；
+- 利息归本；
+- 资金余额、可用余额等账户级字段。
 
 ## 安装为 Codex Skill
 
@@ -210,6 +217,8 @@ python3 scripts/ledger_query.py cash-diff
 python3 scripts/ledger_query.py realized
 python3 scripts/ledger_query.py positions
 python3 scripts/ledger_query.py pnl-by-stock
+python3 scripts/ledger_query.py fifo-realized
+python3 scripts/ledger_query.py fifo-pnl-by-stock
 python3 scripts/ledger_query.py stock --stock-code 301421
 ```
 
@@ -222,8 +231,8 @@ python3 scripts/account_report.py --html reports/account_report.html
 说明：
 
 - `cash-diff` 是现金流差额，不等于持仓未闭合时的已实现盈亏。
-- `realized` 和 `pnl-by-stock` 使用 FIFO 匹配。
-- 如果历史数据从已有持仓之后才开始，无法匹配的卖出会标记为 `unmatched_sell_quantity`，不会强行制造虚假盈亏。
+- `realized` 和 `pnl-by-stock` 使用券商滚动成本口径，作为教练手记、账户报告和个人站的主展示口径。
+- `fifo-realized` 和 `fifo-pnl-by-stock` 使用 FIFO 匹配，仅作为审计视图；如果历史数据从已有持仓之后才开始，无法匹配的卖出会标记为 `unmatched_sell_quantity`，不会强行制造虚假盈亏。
 
 ## 明日研究股票池
 

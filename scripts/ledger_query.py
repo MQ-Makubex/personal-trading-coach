@@ -83,7 +83,7 @@ def query_by_stock(conn: sqlite3.Connection, stock_code: str | None) -> list[sql
         f"""
         select
           stock_code,
-          stock_name,
+          coalesce(max(case when stock_name not like 'XD%' then stock_name end), max(stock_name)) as stock_name,
           count(*) as trade_rows,
           sum(case when side = 'BUY' then 1 else 0 end) as buy_rows,
           sum(case when side = 'SELL' then 1 else 0 end) as sell_rows,
@@ -92,7 +92,7 @@ def query_by_stock(conn: sqlite3.Connection, stock_code: str | None) -> list[sql
           round(sum(coalesce(commission,0) + coalesce(stamp_tax,0) + coalesce(transfer_fee,0) + coalesce(other_fee,0)), 2) as fees
         from trades
         {where}
-        group by stock_code, stock_name
+        group by stock_code
         order by trade_rows desc, stock_code
         """,
         params,
@@ -206,16 +206,45 @@ def query_t_candidates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 def query_cash_diff_by_stock(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         """
+        with trade_cash as (
+          select
+            stock_code,
+            coalesce(max(case when stock_name not like 'XD%' then stock_name end), max(stock_name)) as stock_name,
+            count(*) as trade_rows,
+            round(sum(case when side = 'BUY' then amount else 0 end), 2) as buy_amount,
+            round(sum(case when side = 'SELL' then amount else 0 end), 2) as sell_amount,
+            round(sum(coalesce(commission,0) + coalesce(stamp_tax,0) + coalesce(transfer_fee,0) + coalesce(other_fee,0)), 2) as fees,
+            round(sum(coalesce(net_amount,0)), 2) as trade_cash_difference
+          from trades
+          group by stock_code
+        ),
+        adjustment_cash as (
+          select
+            stock_code,
+            coalesce(max(case when stock_name not like 'XD%' then stock_name end), max(stock_name)) as stock_name,
+            count(*) as cash_adjustment_rows,
+            round(sum(coalesce(net_amount,0)), 2) as cash_adjustment_amount
+          from cash_adjustments
+          group by stock_code
+        ),
+        all_codes as (
+          select stock_code from trade_cash
+          union
+          select stock_code from adjustment_cash
+        )
         select
-          stock_code,
-          stock_name,
-          count(*) as trade_rows,
-          round(sum(case when side = 'BUY' then amount else 0 end), 2) as buy_amount,
-          round(sum(case when side = 'SELL' then amount else 0 end), 2) as sell_amount,
-          round(sum(coalesce(commission,0) + coalesce(stamp_tax,0) + coalesce(transfer_fee,0) + coalesce(other_fee,0)), 2) as fees,
-          round(sum(case when side = 'SELL' then amount else 0 end) - sum(case when side = 'BUY' then amount else 0 end) - sum(coalesce(commission,0) + coalesce(stamp_tax,0) + coalesce(transfer_fee,0) + coalesce(other_fee,0)), 2) as cash_difference_not_realized_pnl
-        from trades
-        group by stock_code, stock_name
+          c.stock_code,
+          coalesce(t.stock_name, a.stock_name) as stock_name,
+          coalesce(t.trade_rows, 0) as trade_rows,
+          coalesce(t.buy_amount, 0) as buy_amount,
+          coalesce(t.sell_amount, 0) as sell_amount,
+          coalesce(t.fees, 0) as fees,
+          coalesce(a.cash_adjustment_rows, 0) as cash_adjustment_rows,
+          coalesce(a.cash_adjustment_amount, 0) as cash_adjustment_amount,
+          round(coalesce(t.trade_cash_difference, 0) + coalesce(a.cash_adjustment_amount, 0), 2) as cash_difference_not_realized_pnl
+        from all_codes c
+        left join trade_cash t on t.stock_code = c.stock_code
+        left join adjustment_cash a on a.stock_code = c.stock_code
         order by cash_difference_not_realized_pnl asc
         """
     ).fetchall()
@@ -246,6 +275,10 @@ def main() -> int:
             "realized",
             "positions",
             "pnl-by-stock",
+            "broker-realized",
+            "broker-pnl-by-stock",
+            "fifo-realized",
+            "fifo-pnl-by-stock",
         ],
     )
     parser.add_argument("--sqlite", type=Path, default=Path("state/account_ledger.sqlite"))
@@ -272,13 +305,19 @@ def main() -> int:
             rows = query_t_candidates(conn)
         elif args.query == "cash-diff":
             rows = query_cash_diff_by_stock(conn)
-        elif args.query == "realized":
-            print_rows(analytics_rows(conn, "realized_lots", args.limit))
+        elif args.query in ("realized", "broker-realized"):
+            print_rows(analytics_rows(conn, "broker_like_realized_lots", args.limit))
             return 0
         elif args.query == "positions":
             print_rows(analytics_rows(conn, "open_positions"))
             return 0
-        elif args.query == "pnl-by-stock":
+        elif args.query in ("pnl-by-stock", "broker-pnl-by-stock"):
+            print_rows(analytics_rows(conn, "broker_like_realized_by_stock"))
+            return 0
+        elif args.query == "fifo-realized":
+            print_rows(analytics_rows(conn, "realized_lots", args.limit))
+            return 0
+        elif args.query == "fifo-pnl-by-stock":
             print_rows(analytics_rows(conn, "realized_by_stock"))
             return 0
         else:
