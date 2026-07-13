@@ -21,6 +21,8 @@ local_state/**
 *.sqlite3
 *.db
 *.json
+!templates/state/trading_modes.json
+!templates/state/discipline_feed.json
 *.html
 *.md.html
 
@@ -28,6 +30,7 @@ local_state/**
 __pycache__/
 *.py[cod]
 .DS_Store
+.superpowers/
 
 # Keep private directory placeholders
 !state/.gitkeep

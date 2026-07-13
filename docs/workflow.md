@@ -64,7 +64,8 @@ Market fact and research-pool commands:
 ```bash
 python3 scripts/market_snapshot.py --trade-date YYYY-MM-DD --user-view private/market_view.txt --json reports/market_snapshot.json --md reports/market_snapshot.md
 python3 scripts/article_digest.py --trade-date YYYY-MM-DD --text-file private/article_excerpt.txt --affected-trade "是否影响当天交易动作" --json reports/article_digest.json --md reports/article_digest.md
-python3 scripts/research_pool_builder.py private/candidate_universe.csv --trade-date YYYY-MM-DD --md reports/research_pool_candidates.md
+python3 scripts/enhance_candidate_universe.py private/candidate_universe.csv --trade-date YYYY-MM-DD --provider auto --output reports/enriched_candidate_universe.csv
+python3 scripts/research_pool_builder.py reports/enriched_candidate_universe.csv --trade-date YYYY-MM-DD --md reports/research_pool_candidates.md
 python3 scripts/daily_session.py --trade-date YYYY-MM-DD --pasted-trades private/raw_pasted_trades.txt --market-snapshot reports/market_snapshot.md --research-pool reports/research_pool_candidates.md --article-digest reports/article_digest.md
 ```
 
