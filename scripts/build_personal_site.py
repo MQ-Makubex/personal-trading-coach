@@ -78,12 +78,23 @@ POOL_COLUMNS = {
     "stock_name": {"名称", "证券名称", "股票名称"},
     "stock_identity": {"股票"},
     "theme": {"题材", "题材篮子", "篮子/题材", "产业方向", "方向"},
-    "buy_point": {"买点", "买点类型", "触发", "触发条件"},
+    "buy_point": {"买点", "买点类型", "触发", "触发条件", "观察触发"},
+    "ma_summary": {"5/10/20/50/200 日线", "均线事实", "均线"},
 }
+
+TRADE_PLAN_STOCK_RE = re.compile(r"^\s*-\s*股票\s*[：:]\s*(?P<code>\d{6})\s+(?P<name>[^\s].*?)\s*$")
+TRADE_PLAN_SUMMARY_RE = re.compile(r"^\s*-\s*一句话预案\s*[：:]\s*(?P<summary>.+?)\s*$")
 
 
 def esc(value: Any) -> str:
     return html.escape("" if value is None else str(value), quote=True)
+
+
+def xueqiu_quote_url(stock_code: Any) -> str:
+    """Return the public Xueqiu quote page for a mainland A-share code."""
+    code = str(stock_code or "").strip()
+    exchange = "SH" if code.startswith("6") else "SZ"
+    return f"https://xueqiu.com/S/{exchange}{code}"
 
 
 def money(value: Any) -> str:
@@ -263,7 +274,19 @@ def parse_pool_row(raw_line: str) -> list[str] | None:
 def pool_column_indices(row: list[str]) -> dict[str, int] | None:
     columns: dict[str, int | None] = {}
     for field, aliases in POOL_COLUMNS.items():
-        columns[field] = next((index for index, cell in enumerate(row) if cell in aliases), None)
+        columns[field] = next(
+            (
+                index
+                for index, cell in enumerate(row)
+                if cell in aliases
+                or (
+                    field == "ma_summary"
+                    and "均线" in cell
+                    and ("事实" in cell or "日线" in cell)
+                )
+            ),
+            None,
+        )
     has_separate_identity = columns["stock_code"] is not None and columns["stock_name"] is not None
     if not has_separate_identity and columns["stock_identity"] is None:
         return None
@@ -323,11 +346,33 @@ def extract_research_pool_candidates(markdown_text: str) -> list[dict[str, str]]
                     "stock_name": name,
                     "theme": row[theme_index] if theme_index is not None else "待核验",
                     "buy_point": row[buy_point_index] if buy_point_index is not None else "待核验",
+                    "ma_summary": row[columns["ma_summary"]] if columns.get("ma_summary") is not None else "待核验",
                 }
             )
             row_index += 1
         return output
     return []
+
+
+def extract_trade_plan_summaries(markdown_text: str) -> list[dict[str, str]]:
+    """Extract only selected, stock-specific one-line plans for the coach desk."""
+    sections = re.split(r"(?m)^##\s+", markdown_text)
+    output: list[dict[str, str]] = []
+    for section in sections[1:]:
+        if not re.search(r"已选个股预案|预案\s*\d+", section.splitlines()[0] if section.splitlines() else ""):
+            continue
+        stock: dict[str, str] | None = None
+        summary = ""
+        for line in section.splitlines():
+            stock_match = TRADE_PLAN_STOCK_RE.match(line)
+            if stock_match:
+                stock = {"stock_code": stock_match.group("code"), "stock_name": stock_match.group("name").strip()}
+            summary_match = TRADE_PLAN_SUMMARY_RE.match(line)
+            if summary_match:
+                summary = summary_match.group("summary").strip()
+        if stock and summary and not summary.startswith("待"):
+            output.append({**stock, "summary": summary})
+    return output
 
 
 def title_from_markdown(path: Path) -> str:
@@ -479,6 +524,38 @@ def extract_latest_quotes(reports_dir: Path, positions: list[dict[str, Any]]) ->
                         "date": infer_date(rel),
                         "source": str(rel).replace("\\", "/"),
                     }
+    # Candidate enrichment is the canonical per-stock quote source. The
+    # market snapshot intentionally summarizes indexes and breadth, so it
+    # does not contain every held stock's close.
+    enriched_files = sorted(
+        reports_dir.rglob("enriched_candidate_universe.csv"),
+        key=lambda path: (infer_date(path.relative_to(reports_dir)), path.stat().st_mtime),
+        reverse=True,
+    )
+    for path in enriched_files:
+        if len(quotes) == len(wanted):
+            break
+        try:
+            with path.open(newline="", encoding="utf-8-sig") as handle:
+                rows = csv.DictReader(handle)
+                for row in rows:
+                    code = str(row.get("stock_code") or row.get("code") or "").strip()
+                    close = row.get("close")
+                    if code not in wanted or code in quotes or not close:
+                        continue
+                    try:
+                        price = round(float(close), 4)
+                    except (TypeError, ValueError):
+                        continue
+                    quotes[code] = {
+                        "stock_code": code,
+                        "stock_name": wanted[code],
+                        "price": price,
+                        "date": str(row.get("latest_trade_date") or infer_date(path.relative_to(reports_dir))),
+                        "source": str(path.relative_to(reports_dir)).replace("\\", "/"),
+                    }
+        except (OSError, csv.Error):
+            continue
     return quotes
 
 
@@ -757,6 +834,8 @@ def build_data(
     target_date = resolve_workbench_target_date(documents, as_of_date or datetime.now().date())
     selected_plan = select_daily_document(documents, "trade_plan", target_date)
     selected_pool = select_daily_document(documents, "research_pool", target_date)
+    plan_document = selected_plan.get("document") or {}
+    selected_plan["summaries"] = extract_trade_plan_summaries(str(plan_document.get("markdown") or ""))
     pool_document = selected_pool["document"]
     selected_pool["candidates"] = extract_research_pool_candidates(str((pool_document or {}).get("markdown") or ""))
     ledger_dataset = {
@@ -1060,10 +1139,17 @@ def workbench_document_meta(selected: dict[str, Any]) -> str:
 def render_trade_plan(workbench: dict[str, Any]) -> str:
     selected = workbench["trade_plan"]
     document = selected.get("document") or {}
-    if document:
-        body = f"<strong>{esc(document.get('title'))}</strong><p>{esc(document.get('summary') or '暂无摘要。')}</p>"
+    summaries = selected.get("summaries") or []
+    if document and summaries:
+        cards = "".join(
+            f'<article class="plan-summary"><header><strong>{esc(row.get("stock_name"))}</strong><small class="mono">{esc(row.get("stock_code"))}</small></header><p>{esc(row.get("summary"))}</p></article>'
+            for row in summaries
+        )
+        body = f'<div class="plan-summary-list">{cards}</div>'
+    elif document:
+        body = '<div class="workbench-empty">等待从股票池选择个股并完成教练补充</div>'
     else:
-        body = '<div class="workbench-empty">暂无已发布交易预案</div>'
+        body = '<div class="workbench-empty">暂无已发布个股交易预案</div>'
     return f"""<div class="plan-pane" data-trade-plan>
       <div class="workbench-heading"><div><span>TRADE PLAN</span><h2>交易预案 · <time class="mono">{esc(workbench['target_date'])}</time></h2></div></div>
       {workbench_document_meta(selected)}
@@ -1074,13 +1160,13 @@ def render_trade_plan(workbench: dict[str, Any]) -> str:
 def render_research_pool(workbench: dict[str, Any]) -> str:
     selected = workbench["research_pool"]
     document = selected.get("document") or {}
-    href = str(document.get("document_path") or "")
     rows = []
     for candidate in selected.get("candidates", []):
-        content = f"""<span class="pool-identity"><strong>{esc(candidate.get('stock_name'))}</strong><small class="mono">{esc(candidate.get('stock_code'))}</small></span><span><small>题材</small><strong>{esc(candidate.get('theme') or '待核验')}</strong></span><span><small>买点类型</small><strong>{esc(candidate.get('buy_point') or '待核验')}</strong></span>"""
-        tag = "a" if href else "div"
-        href_attr = f' href="{esc(href)}"' if href else ""
-        rows.append(f'<{tag} class="pool-row" data-pool-row{href_attr}>{content}</{tag}>')
+        code = str(candidate.get("stock_code") or "")
+        name = esc(candidate.get("stock_name"))
+        xueqiu_link = f'<a class="pool-stock-link" href="{xueqiu_quote_url(code)}" target="_blank" rel="noopener">{name}</a>'
+        content = f"""<span class="pool-identity"><strong>{xueqiu_link}</strong><small class="mono">{esc(code)}</small></span><span><small>题材</small><strong>{esc(candidate.get('theme') or '待核验')}</strong></span><span><small>均线状态</small><strong>{esc(candidate.get('ma_summary') or '待核验')}</strong></span><span><small>观察触发</small><strong>{esc(candidate.get('buy_point') or '待核验')}</strong></span>"""
+        rows.append(f'<div class="pool-row" data-pool-row>{content}</div>')
     pool_html = "".join(rows) or '<div class="workbench-empty">暂无已解析股票池候选</div>'
     return f"""<div class="pool-pane">
       <div class="workbench-heading"><div><span>RESEARCH POOL</span><h2>完整股票池 · <time class="mono">{esc(workbench['target_date'])}</time></h2></div><strong class="count-label">{len(rows)} 支</strong></div>

@@ -47,6 +47,19 @@ When the user invokes `$personal-trading-coach` or asks for the trading coach, d
 - 历史导入: help sanitize and initialize historical trade facts.
 - 截图备用识别: only when the user explicitly uploads a screenshot to Codex; extract standard trade facts, do not store the raw image in the repository.
 
+交易预案流程必须分两步：用户先从研究池选择不超过 3 支具体股票并写出简单操作计划，教练再逐股补充触发条件、操作形式、失效边界和仓位规则。首页只展示已完成个股预案的一句话摘要，不展示研究池的泛化条件。
+
+股票池是个人页和雪球自选的唯一事实源。每次生成或替换股票池时，必须在同一轮任务中：
+
+1. 产出并校验完整 15 支代码，排除账户不能交易的 688 股票；同时硬过滤收盘价低于或等于 200 日均线的股票，200 日线数据缺失也不放行；
+2. 刷新个人页股票池，股票名称链接到对应雪球行情/K 线页；
+3. 在已登录的 Google Chrome 中清空雪球原有自选，加入完全相同的 15 支股票；
+4. 核验雪球代码集合与个人页清单一致，并把 `xueqiu_watchlist_sync.json` 标记为 `synced`。
+
+任何一步未完成，都只能标记为待同步，不能把本轮任务报告为完成。`finalize_session.py` 会为本轮股票池生成同步清单；清单不完整时会阻断发布。
+
+当教练手记确认了“当前正在验证的交易模式”时，必须同步更新 `state/trading_modes.json`：模式定义、`mode_eligibility` 和对应交易周期的 `samples[].cycle_id` 三者缺一不可。进行中的持仓也可以绑定为验证样本，但结果未知时使用 `evidence_direction: indeterminate`，不能因为尚未清仓而显示为未绑定。模式资格至少显示一条结构化记录；正式样本数仍按已验证结果计算，单个进行中样本不得升级为可复制。
+
 ## Coaching Rules
 
 - The main output is an LLM-written coach note, not a script-generated generic report.
@@ -55,6 +68,31 @@ When the user invokes `$personal-trading-coach` or asks for the trading coach, d
 - Preserve continuity through `持仓故事线`, `教练记忆`, and `个人交易模式`.
 - Update playbooks conservatively: one successful trade is not a reusable mode; at least 3 similar evidence points are required before a pattern can be called `可复制`.
 - Use red-card language for severe plan violations, but keep the feedback tied to evidence.
+
+## Evidence Completeness Gate
+
+The presence of a Markdown template is not evidence. Before writing a full
+daily review, retrieve the complete public fact packet:
+
+1. `market_snapshot.py` must contain the four A-share indexes, whole-market
+   breadth, and at least two US index mappings. Breadth must represent at
+   least 2,000 stocks and `total = up + down + flat`.
+2. A candidate universe must be enriched through `enhance_candidate_universe.py`.
+   The 15 rows must be non-688, above the 200-day moving average, and have
+   current data, at least 200 bars, and all 5/10/20/50/200-day moving averages.
+   AKShare, BaoStock, and the public HTTP fallback are tried in sequence.
+3. `article_digest.json` must contain at least two current public sources,
+   including US/overseas mapping and industry/policy facts. Use web research
+   when the user did not provide URLs; do not treat a blank article template
+   as a source.
+4. `daily_session.py` creates a sanitized current-position snapshot from the
+   local ledger when the user does not supply one.
+
+If one source fails, continue with the next public source and record the
+provenance. Do not fill missing fields with guesses or stale cache data. Run
+`finalize_session.py --strict`; it runs `evidence_completeness.py` and will
+only refresh the personal site after the evidence packet passes. A failure is
+a retrieval problem to solve, not a reason to publish a low-quality review.
 
 ## Safety Boundaries
 
@@ -102,16 +140,13 @@ python3 scripts/account_report.py --html reports/account_report.html
 python3 scripts/build_evidence_packet.py --trades reports/pasted_trades_extracted.csv --trade-date YYYY-MM-DD --journal private/journal.txt --market-view private/market_view.txt -o reports/evidence_packet.md
 python3 scripts/pre_trade_guard.py --security "证券代码 证券名称" --action "拟执行动作" --trigger "触发条件" --invalidation "失效条件" --stop-anchor "止损锚点" --plan reports/run_*/trade_plan.md --html reports/pre_trade_guard.html
 python3 scripts/finalize_session.py reports/run_YYYYMMDD_HHMMSS --strict
+python3 scripts/evidence_completeness.py reports/run_YYYYMMDD_HHMMSS
 python3 scripts/draft_state_updates.py reports/run_YYYYMMDD_HHMMSS --require-finalize-ok
 python3 scripts/append_state_update.py decision_events.md --update reports/run_YYYYMMDD_HHMMSS/state_update_decision_events.md --trade-date YYYY-MM-DD --source reports/run_YYYYMMDD_HHMMSS/coach_note.md
 ```
 
-## Rendering
+## Output Routing
 
-After writing a Markdown coach note, render it with:
-
-```bash
-python3 /Users/makubex/Documents/Trading/personal-trading-coach/scripts/render_markdown.py INPUT.md -o OUTPUT.html --title "每日教练手记"
-```
-
-HTML output is a local reading artifact only.
+Markdown is canonical. After the evidence gate and Markdown review pass,
+`finalize_session.py` refreshes the multi-page personal site. Session-level
+HTML copies are not generated.

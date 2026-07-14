@@ -170,6 +170,31 @@ class TradingModeStateTest(unittest.TestCase):
         self.assertTrue(mode["samples"][0]["cycle_found"])
         self.assertEqual(mode["samples"][0]["cycle"], cycles["cycle-1"])
 
+    def test_validation_mode_can_bind_open_cycle_before_outcome_is_known(self) -> None:
+        cycles = {
+            "open-cycle": {
+                "cycle_id": "open-cycle",
+                "status": "open",
+                "stock_code": "301396",
+                "stock_name": "宏景科技",
+            }
+        }
+        sample = valid_sample(
+            "open-cycle",
+            evidence_direction="indeterminate",
+            note="周期进行中，结果待核验",
+        )
+        payload = valid_modes_payload([valid_mode([sample])])
+        payload["mode_eligibility"] = [valid_eligibility()]
+
+        result = load_modes_payload(payload, cycles)
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["mode_eligibility"][0]["status"], "eligible")
+        self.assertEqual(result["modes"][0]["samples"][0]["cycle_id"], "open-cycle")
+        self.assertTrue(result["modes"][0]["samples"][0]["cycle_found"])
+        self.assertEqual(result["modes"][0]["valid_formal_sample_count"], 0)
+
     def test_malformed_mode_json_returns_repair_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "trading_modes.json"

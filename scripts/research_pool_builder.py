@@ -44,10 +44,28 @@ def excluded_by_prefix(row: dict[str, str], prefixes: list[str]) -> bool:
     return any(code.startswith(prefix) for prefix in prefixes)
 
 
-def build_pool(rows: list[dict[str, str]], limit: int, exclude_prefixes: list[str]) -> list[dict[str, str]]:
+def _is_above_ma200(row: dict[str, str]) -> bool:
+    """Only allow rows with a complete close/MA200 comparison above the line."""
+    try:
+        close = float(str(row.get("close") or ""))
+        ma200 = float(str(row.get("ma200") or ""))
+    except (TypeError, ValueError):
+        return False
+    return close > ma200
+
+
+def build_pool(
+    rows: list[dict[str, str]],
+    limit: int,
+    exclude_prefixes: list[str],
+    *,
+    require_above_ma200: bool = True,
+) -> list[dict[str, str]]:
     output: list[dict[str, str]] = []
     for row in rows:
         if excluded_by_prefix(row, exclude_prefixes):
+            continue
+        if require_above_ma200 and not _is_above_ma200(row):
             continue
         item = {field: str(row.get(field, "") or "").strip() for field in OUTPUT_FIELDS}
         item["stock_code"] = str(row.get("stock_code") or row.get("code") or "").strip()
@@ -98,6 +116,7 @@ def markdown(rows: list[dict[str, str]], trade_date: str) -> str:
             "- 用户最多选择 3 支进入明日交易预案。",
             "- 没有明确触发条件、失效条件、止损锚点和仓位上限，不能从研究池升级为预案。",
             "- 默认剔除 688 科创板股票；如需观察，只能作为板块温度计，不进入候选池。",
+            "- 硬过滤：收盘价低于或等于 200 日均线的股票不进入候选池；200 日均线数据缺失也不放行。",
             "- 研究池结果需要次日复盘验证，并反馈到 `state/research_pool_protocol.md`。",
         ]
     )
@@ -111,13 +130,19 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=15)
     parser.add_argument("--exclude-prefix", action="append", default=["688"], help="默认剔除无法交易的代码前缀，可重复传入。")
     parser.add_argument("--include-688", action="store_true", help="允许 688 进入研究池，仅在账户可交易时使用。")
+    parser.add_argument("--allow-below-ma200", action="store_true", help="仅用于诊断，允许 200 日均线下方股票进入池。正式流程不要使用。")
     parser.add_argument("--csv", type=Path, default=Path("reports/research_pool_candidates.csv"))
     parser.add_argument("--json", type=Path, default=Path("reports/research_pool_candidates.json"))
     parser.add_argument("--md", type=Path, default=Path("reports/research_pool_candidates.md"))
     args = parser.parse_args()
 
     exclude_prefixes = [] if args.include_688 else args.exclude_prefix
-    rows = build_pool(read_rows(args.universe_csv), args.limit, exclude_prefixes)
+    rows = build_pool(
+        read_rows(args.universe_csv),
+        args.limit,
+        exclude_prefixes,
+        require_above_ma200=not args.allow_below_ma200,
+    )
     write_csv(rows, args.csv)
     args.json.parent.mkdir(parents=True, exist_ok=True)
     args.md.parent.mkdir(parents=True, exist_ok=True)

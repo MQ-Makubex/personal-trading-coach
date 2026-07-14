@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import importlib
+import json
 import math
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
@@ -117,6 +120,75 @@ def baostock_adjust_flag(adjust: str) -> str:
     return mapping.get(adjust, "2")
 
 
+def eastmoney_adjust_flag(adjust: str) -> str:
+    mapping = {
+        "none": "0",
+        "qfq": "1",
+        "hfq": "2",
+    }
+    return mapping.get(adjust, "1")
+
+
+def eastmoney_secid(code: str) -> str:
+    symbol = normalize_stock_code(code)
+    market = "1" if symbol.startswith(("5", "6", "9")) else "0"
+    return f"{market}.{symbol}"
+
+
+def fetch_daily_bars_eastmoney(code: str, start_date: str, end_date: str, adjust: str) -> DailySeries:
+    """Use Eastmoney's public kline endpoint when optional Python adapters are unavailable."""
+    params = {
+        "secid": eastmoney_secid(code),
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+        "klt": "101",
+        "fqt": eastmoney_adjust_flag(adjust),
+        "beg": normalize_date(start_date, compact=True),
+        "end": normalize_date(end_date, compact=True),
+    }
+    url = "https://push2his.eastmoney.com/api/qt/stock/kline/get?" + urllib.parse.urlencode(params)
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 personal-trading-coach/0.1",
+            "Accept": "application/json,text/plain,*/*",
+            "Referer": "https://quote.eastmoney.com/",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=12) as response:
+        payload = json.loads(response.read(4 * 1024 * 1024).decode("utf-8", errors="replace"))
+    data = (payload or {}).get("data") or {}
+    klines = data.get("klines") or []
+    if not klines:
+        raise RuntimeError("eastmoney: empty daily series")
+    bars: list[DailyBar] = []
+    for line in klines:
+        parts = str(line).split(",")
+        if len(parts) < 11:
+            continue
+        bars.append(
+            DailyBar(
+                trade_date=normalize_date(parts[0]),
+                open=to_float(parts[1]),
+                close=to_float(parts[2]),
+                high=to_float(parts[3]),
+                low=to_float(parts[4]),
+                volume=to_float(parts[5]),
+                amount=to_float(parts[6]),
+                pct_chg=to_float(parts[8]),
+                turnover=to_float(parts[10]),
+            )
+        )
+    bars.sort(key=lambda item: item.trade_date)
+    return DailySeries(
+        code=normalize_stock_code(code),
+        provider="eastmoney_http",
+        bars=bars,
+        source="eastmoney.push2his.stock.kline",
+        notes=["AKShare/BaoStock 不可用时的 HTTP 兜底数据源。"],
+    )
+
+
 def fetch_daily_bars_baostock(code: str, start_date: str, end_date: str, adjust: str) -> DailySeries:
     baostock = importlib.import_module("baostock")
     lg = baostock.login()
@@ -170,7 +242,7 @@ def fetch_daily_bars(
     provider: str = "auto",
     adjust: str = "qfq",
 ) -> DailySeries:
-    providers = ["akshare", "baostock"] if provider == "auto" else [provider]
+    providers = ["akshare", "baostock", "eastmoney"] if provider == "auto" else [provider]
     errors: list[str] = []
     for item in providers:
         try:
@@ -178,6 +250,8 @@ def fetch_daily_bars(
                 series = fetch_daily_bars_akshare(code, start_date, end_date, adjust)
             elif item == "baostock":
                 series = fetch_daily_bars_baostock(code, start_date, end_date, adjust)
+            elif item == "eastmoney":
+                series = fetch_daily_bars_eastmoney(code, start_date, end_date, adjust)
             else:
                 raise ValueError(f"unknown provider: {item}")
             if series.bars:

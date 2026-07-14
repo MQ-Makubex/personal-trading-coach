@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from build_personal_site import write_site as write_personal_site
+from evidence_completeness import validate_session_inputs
+from xueqiu_watchlist_sync import write_watchlist_manifest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -131,6 +133,45 @@ def word_count(path: Path) -> int:
     return chinese_chars + latin_words
 
 
+def validate_trade_plan_content(path: Path) -> list[dict[str, Any]]:
+    """Require homepage-eligible plans to be stock-specific and actionable."""
+    text = read_text(path)
+    if not text:
+        return []
+    if "暂无用户选择" in text or "等待用户选择" in text:
+        return []
+    findings: list[dict[str, Any]] = []
+    if "从 " in text and "中最多选择" in text:
+        findings.append(
+            {
+                "file": path.name,
+                "risk": "generic_trade_plan",
+                "reason": "交易预案不能继续使用候选篮子，必须先绑定用户选择的具体股票。",
+            }
+        )
+    sections = re.split(r"(?m)^##\s+", text)[1:]
+    plan_sections = [section for section in sections if re.match(r"已选个股预案\s*\d+", section.splitlines()[0] if section.splitlines() else "")]
+    if not plan_sections and "暂无已选个股预案" not in text:
+        findings.append(
+            {
+                "file": path.name,
+                "risk": "missing_stock_specific_plan",
+                "reason": "交易预案没有可识别的个股预案章节。",
+            }
+        )
+    stock_pattern = re.compile(r"^\s*-\s*股票\s*[：:]\s*\d{6}\s+.+$", re.MULTILINE)
+    summary_pattern = re.compile(r"^\s*-\s*一句话预案\s*[：:]\s*(?!待).+", re.MULTILINE)
+    for index, section in enumerate(plan_sections, start=1):
+        if not stock_pattern.search(section):
+            findings.append({"file": path.name, "risk": "missing_plan_stock", "reason": f"第 {index} 个预案未绑定具体股票。"})
+        if not summary_pattern.search(section):
+            findings.append({"file": path.name, "risk": "missing_plan_summary", "reason": f"第 {index} 个预案缺少首页一句话预案。"})
+        for field in ("触发条件", "操作形式", "失效条件", "止损锚点", "仓位上限"):
+            if not re.search(rf"^\s*-\s*{re.escape(field)}\s*[：:]\s*(?!\s*$).+", section, re.MULTILINE):
+                findings.append({"file": path.name, "risk": "incomplete_stock_plan", "reason": f"第 {index} 个预案缺少：{field}。"})
+    return findings
+
+
 def validate_session(run_dir: Path) -> dict[str, Any]:
     errors: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
@@ -155,6 +196,10 @@ def validate_session(run_dir: Path) -> dict[str, Any]:
         if path.exists():
             errors.extend(scan_direct_advice(path))
 
+    trade_plan = run_dir / "trade_plan.md"
+    if trade_plan.exists():
+        errors.extend(validate_trade_plan_content(trade_plan))
+
     research_pool = run_dir / "research_pool.md"
     if research_pool.exists() and "研究池不是买入名单" not in read_text(research_pool):
         warnings.append({"file": "research_pool.md", "risk": "missing_research_boundary", "reason": "建议明确研究池不是买入名单。"})
@@ -162,6 +207,28 @@ def validate_session(run_dir: Path) -> dict[str, Any]:
     xueqiu_post = run_dir / "xueqiu_post.md"
     if xueqiu_post.exists() and "不构成投资建议" not in read_text(xueqiu_post):
         errors.append({"file": "xueqiu_post.md", "risk": "missing_public_boundary", "reason": "雪球草稿缺少不构成投资建议边界。"})
+
+    # Real daily sessions carry a manifest. Their source packet must pass the
+    # evidence gate before the coach note can reach the personal site.
+    if (run_dir / "session_manifest.json").exists():
+        quality = validate_session_inputs(run_dir)
+        write_text(run_dir / "data_quality.json", json.dumps(quality, ensure_ascii=False, indent=2))
+        errors.extend(
+            {
+                "file": "data_quality.json",
+                "risk": "incomplete_evidence",
+                "reason": message,
+            }
+            for message in quality.get("errors", [])
+        )
+        warnings.extend(
+            {
+                "file": "data_quality.json",
+                "risk": "evidence_warning",
+                "reason": message,
+            }
+            for message in quality.get("warnings", [])
+        )
 
     return {
         "status": "failed" if errors else "ok",
@@ -180,12 +247,32 @@ def finalize(args: argparse.Namespace) -> dict[str, Any]:
     checklist = ensure_state_update_checklist(run_dir, trade_date, overwrite=args.overwrite_checklist)
 
     report = validate_session(run_dir)
+    research_pool_path = run_dir / "research_pool.md"
+    if research_pool_path.exists() and (run_dir / "session_manifest.json").exists():
+        sync_manifest_path = run_dir / "xueqiu_watchlist_sync.json"
+        sync_manifest = write_watchlist_manifest(
+            research_pool_path,
+            sync_manifest_path,
+            run_id=run_id_from_dir(run_dir),
+            trade_date=trade_date,
+        )
+        report["xueqiu_watchlist_sync_manifest"] = str(sync_manifest_path)
+        if sync_manifest["status"] == "blocked_incomplete_pool":
+            report["errors"].append(
+                {
+                    "file": "xueqiu_watchlist_sync.json",
+                    "risk": "incomplete_xueqiu_pool",
+                    "reason": ", ".join(sync_manifest["errors"]),
+                }
+            )
+            report["status"] = "failed"
     report.update(
         {
             "run_dir": str(run_dir),
             "trade_date": trade_date,
             "state_update_checklist": str(checklist),
             "markdown_outputs": sorted(str(path) for path in run_dir.glob("*.md")),
+            "data_quality": str(run_dir / "data_quality.json") if (run_dir / "data_quality.json").exists() else None,
         }
     )
     write_text(run_dir / "finalize_report.json", json.dumps(report, ensure_ascii=False, indent=2))

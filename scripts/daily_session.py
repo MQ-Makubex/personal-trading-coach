@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 from build_evidence_packet import build_packet
 from init_state import DEFAULT_TEMPLATE_DIR, init_state
+from ledger_analytics import fifo_analytics
 from ledger_import import import_files
 from parse_pasted_trades import parse_text, write_csv
 from privacy_guard import scan_csv
@@ -78,6 +79,50 @@ def build_article_digest(args: argparse.Namespace, run_dir: Path, run_id: str) -
             body += "### 摘录\n\n" + article_excerpt + "\n"
     output = run_dir / "article_digest.md"
     write_text(output, body)
+    return output
+
+
+def build_positions_snapshot(state_dir: Path, run_dir: Path) -> Path | None:
+    """Create a sanitized position snapshot from the local ledger when none was supplied."""
+    sqlite_path = state_dir / "account_ledger.sqlite"
+    if not sqlite_path.exists():
+        return None
+    import sqlite3
+
+    conn = sqlite3.connect(sqlite_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        positions = fifo_analytics(conn).get("open_positions", [])
+    finally:
+        conn.close()
+    output = run_dir / "positions_snapshot.md"
+    lines = [
+        "# 当前持仓事实快照",
+        "",
+        "本快照只来自本地交易底账推算，不包含账户余额、账号或身份信息。",
+        "",
+        "| 证券代码 | 证券名称 | 持仓数量 | 含费成本 | 含费均价 | 首次买入 | 最近买入 |",
+        "| --- | --- | ---: | ---: | ---: | --- | --- |",
+    ]
+    for row in positions:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(row.get("stock_code") or ""),
+                    str(row.get("stock_name") or ""),
+                    str(row.get("open_quantity") or ""),
+                    str(row.get("broker_like_cost_basis_after_fees") or row.get("open_cost_basis_after_fees") or ""),
+                    str(row.get("broker_like_average_cost_after_fees") or row.get("average_cost_after_fees") or ""),
+                    str(row.get("first_buy_date") or ""),
+                    str(row.get("last_buy_date") or ""),
+                ]
+            )
+            + " |"
+        )
+    if not positions:
+        lines.append("| - | 当前无持仓 | 0 | 0 | - | - | - |")
+    write_text(output, "\n".join(lines) + "\n")
     return output
 
 
@@ -185,6 +230,7 @@ def prepare_session(args: argparse.Namespace) -> Path:
 
     init_state(DEFAULT_TEMPLATE_DIR, args.state_dir, force=False)
     trades_csv, manifest_path = parse_and_check_trades(args, run_dir)
+    positions_path = args.positions or build_positions_snapshot(args.state_dir, run_dir)
 
     article_digest = build_article_digest(args, run_dir, run_id)
     market_correction = build_market_correction(args, run_dir, run_id)
@@ -203,7 +249,7 @@ def prepare_session(args: argparse.Namespace) -> Path:
         journal=args.journal,
         market_view=args.market_view,
         articles=article_digest,
-        positions=args.positions,
+        positions=positions_path,
         market_snapshot=market_snapshot,
         research_pool=research_pool,
         output=run_dir / "evidence_packet.md",
@@ -234,6 +280,10 @@ def prepare_session(args: argparse.Namespace) -> Path:
             "research_pool": str(run_dir / "research_pool.md"),
             "trade_plan": str(run_dir / "trade_plan.md"),
             "xueqiu_post": str(run_dir / "xueqiu_post.md"),
+            "positions_snapshot": str(positions_path) if positions_path else None,
+            "positions_input": str(args.positions) if args.positions else None,
+            "journal_input": str(args.journal) if args.journal else None,
+            "market_view_input": str(args.market_view) if args.market_view else None,
             "index_markdown": str(index_md),
         }
     )

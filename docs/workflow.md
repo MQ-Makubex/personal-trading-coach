@@ -26,7 +26,29 @@ The main artifact is a coach-written Markdown note. Scripts support the coach by
 7. Draft coach-memory updates with recurring execution errors, emotional triggers, and training focus.
 8. Build tomorrow's research pool using `templates/research_pool.md`.
 9. Write a Xueqiu-ready review and tomorrow plan draft using `templates/xueqiu_post.md`.
-10. Render Markdown artifacts to HTML for reading.
+10. Run the evidence completeness gate, then refresh the multi-page personal site from the canonical Markdown.
+
+### Stock Pool Coupling
+
+The personal-site stock pool is the single source of truth. Whenever the pool is generated or replaced, these actions must complete in the same task:
+
+1. Finalize exactly 15 tradable stock codes in `research_pool.md`, excluding 688 codes that this account cannot trade and excluding any stock whose close is at or below its 200-day moving average.
+2. Generate the homepage stock-name links from that same list, pointing to the corresponding Xueqiu quote/K-line pages.
+3. Generate `xueqiu_watchlist_sync.json` with the same codes and the requirement to clear the existing watchlist first.
+4. Use the logged-in Google Chrome session to clear the existing Xueqiu watchlist and add those 15 stocks.
+5. Verify the final Xueqiu code set exactly matches the personal-site list, then mark the manifest `synced`.
+
+The local scripts cannot replace the user's logged-in Chrome session, so step 4 is a browser-side action, but it must not be skipped or deferred to the next pool run. An incomplete, duplicated, or 688-containing pool is marked `blocked_incomplete_pool` and must not be presented as synchronized.
+
+### 交易模式状态联动
+
+教练手记确认当前验证模式后，必须同时维护 `state/trading_modes.json` 的模式定义、模式资格和周期样本关联。进行中的持仓周期也应绑定到验证样本；结果未知时记录为 `indeterminate`，而不是显示为“未绑定”。只有已完成且结果可判定的正式样本才计入 `n / 3`，不得把单个持仓样本直接升级为可复制模式。
+
+```bash
+python3 scripts/xueqiu_watchlist_sync.py \
+  --mark-synced reports/run_YYYYMMDD_close/xueqiu_watchlist_sync.json \
+  --verified-codes CODE1 CODE2 ... CODE15
+```
 
 When the user pastes post-market trades, broker tables, or a same-day trading journal, the minimum required output set is:
 
@@ -39,9 +61,10 @@ If the user asks a pure intraday discipline question before the close, a short g
 ## Pre-Market And Intraday Coach Flow
 
 1. Start from tomorrow's research pool.
-2. The user chooses no more than three names for conditional planning.
-3. For each name, write a `明日交易预案` with trigger, invalidation, stop anchor, position cap, and forbidden actions.
-4. During the session, judge every proposed action as one of:
+2. The user chooses no more than three specific stocks and writes a simple operating plan for each.
+3. The coach supplements each selected stock with evidence, trigger, operation form, invalidation, stop anchor, position cap, and forbidden actions.
+4. Only then write the stock-specific `明日交易预案`; the homepage shows one sentence per selected stock in the form `触发条件 -> 操作形式；失效条件 -> 风险边界`.
+5. During the session, judge every proposed action as one of:
    - 计划内动作
    - 提前动作
    - 加风险动作
@@ -84,7 +107,20 @@ python3 scripts/research_pool_builder.py reports/enriched_candidate_universe.csv
 python3 scripts/daily_session.py --trade-date YYYY-MM-DD --pasted-trades private/raw_pasted_trades.txt --market-snapshot reports/market_snapshot.md --research-pool reports/research_pool_candidates.md --article-digest reports/article_digest.md
 ```
 
-如果联网失败，market snapshot 必须写明 `市场背景未联网验证`；教练不得编造缺失的市场事实。
+如果一个公开接口失败，先按 Sina + BaoStock、Yahoo、AKShare/BaoStock/HTTP 兜底链路重试，并记录来源。所有重试仍失败时才标记缺失；教练不得用陈旧缓存或猜测填充市场事实。
+
+## Evidence Completeness Gate
+
+每日复盘不能因为模板文件存在就视为完整。`daily_prepare.py` 会自动对候选池执行行情增强，并由 `finalize_session.py --strict` 调用 `scripts/evidence_completeness.py` 检查：
+
+- A 股四大指数、全市场涨跌家数和涨跌平总数一致；
+- 标普、纳斯达克、费城半导体等至少两个美股映射；
+- 15 支非 688 候选全部有 5/10/20/50/200 日线和最近交易日期；
+- 15 支候选收盘价必须高于 200 日均线；200 日线下方或数据缺失的股票直接剔除，不能为了凑满 15 支回填；
+- 至少两条当前公开来源，覆盖海外/美股映射和产业/政策事实；
+- 交易事实经过隐私检查，且自动生成当前持仓事实快照。
+
+失败时流程继续尝试备用公开源，但不会把不完整材料标记为高质量复盘。检查报告保存在 run 目录的 `data_quality.json`。
 
 ## Account Ledger Flow
 
@@ -107,7 +143,7 @@ The ledger must not store identity information, account identifiers, fund balanc
 Recommended local commands:
 
 ```bash
-python3 scripts/daily_prepare.py --trade-date YYYY-MM-DD --pasted-trades-file private/raw_pasted_trades.txt --journal-file private/journal.txt --market-view-file private/market_view.txt --offline-market
+python3 scripts/daily_prepare.py --trade-date YYYY-MM-DD --pasted-trades-file private/raw_pasted_trades.txt --journal-file private/journal.txt --market-view-file private/market_view.txt --candidate-universe private/candidate_universe.csv
 python3 scripts/daily_session.py --trade-date YYYY-MM-DD --pasted-trades private/raw_pasted_trades.txt --journal private/journal.txt --market-view private/market_view.txt
 ```
 
@@ -195,6 +231,7 @@ After the coach has rewritten `coach_note.md`, `research_pool.md`, and `xueqiu_p
 
 ```bash
 python3 scripts/finalize_session.py reports/run_YYYYMMDD_HHMMSS --strict
+python3 scripts/evidence_completeness.py reports/run_YYYYMMDD_HHMMSS
 ```
 
 The session keeps Markdown as its canonical output. `finalize_session.py` does

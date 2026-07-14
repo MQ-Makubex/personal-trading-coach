@@ -141,7 +141,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="用 AKShare/BaoStock 给候选池补齐日线和均线事实。")
     parser.add_argument("universe_csv", type=Path)
     parser.add_argument("--trade-date", default=date.today().isoformat())
-    parser.add_argument("--provider", choices=["auto", "akshare", "baostock"], default="auto")
+    parser.add_argument("--provider", choices=["auto", "akshare", "baostock", "eastmoney"], default="auto")
     parser.add_argument("--adjust", choices=["qfq", "hfq", "none"], default="qfq")
     parser.add_argument("--lookback-days", type=int, default=460)
     parser.add_argument("--exclude-prefix", action="append", default=["688"])

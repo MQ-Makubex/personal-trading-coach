@@ -72,6 +72,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-market", action="store_true")
     parser.add_argument("--skip-article", action="store_true")
     parser.add_argument("--skip-research-pool", action="store_true")
+    parser.add_argument("--skip-enrichment", action="store_true", help="仅用于诊断；跳过行情与均线增强会导致完整性校验阻断。")
     parser.add_argument("--strict-balance", action="store_true")
     return parser.parse_args()
 
@@ -169,11 +170,29 @@ def main() -> int:
         run_command(command)
 
     if not args.skip_research_pool and args.candidate_universe:
+        enriched_universe = run_dir / "enriched_candidate_universe.csv"
+        if not args.skip_enrichment:
+            run_command(
+                [
+                    str(SCRIPTS / "enhance_candidate_universe.py"),
+                    str(args.candidate_universe),
+                    "--trade-date",
+                    args.trade_date,
+                    "--provider",
+                    "auto",
+                    "--output",
+                    str(enriched_universe),
+                    "--json",
+                    str(run_dir / "enriched_candidate_universe.json"),
+                ]
+            )
+        else:
+            enriched_universe = args.candidate_universe
         research_pool = run_dir / "research_pool_candidates.md"
         run_command(
             [
                 str(SCRIPTS / "research_pool_builder.py"),
-                str(args.candidate_universe),
+                str(enriched_universe),
                 "--trade-date",
                 args.trade_date,
                 "--csv",

@@ -77,10 +77,11 @@ Confirm no real trading data, no raw statement, no account identifier, and no ca
 - `scripts/pre_trade_guard.py` creates plan-consistency and red-card questions for pre-trade or intraday use.
 - `scripts/article_digest.py` stores article URL/title/summary and narrative-pollution checks, not full article text.
 - `scripts/market_snapshot.py` collects public market facts or explicit offline placeholders; it must not store private account data.
-- `scripts/market_data.py` reads public daily A-share bars through optional AKShare/BaoStock adapters only.
+- `scripts/market_data.py` reads public daily A-share bars through AKShare, BaoStock, and an Eastmoney HTTP fallback in that order; source provenance is retained in generated reports.
 - `scripts/enhance_candidate_universe.py` enriches a private candidate CSV with public price, volume, MA, and MA-position fields; generated outputs remain ignored under `reports/`.
 - `scripts/research_pool_builder.py` builds a research-only candidate pool from local market/universe CSV; it must not label output as recommendations.
-- `scripts/finalize_session.py` validates local session notes and renders HTML; outputs remain under ignored `reports/`.
+- `scripts/evidence_completeness.py` validates the public evidence packet before publication; it never reads account identifiers or balances.
+- `scripts/finalize_session.py` validates local session notes and refreshes the personal site; outputs remain under ignored `reports/`.
 - `scripts/append_state_update.py` appends reviewed Markdown snippets to ignored private state files only.
 - `scripts/draft_state_updates.py` extracts draft state snippets from a reviewed run; outputs remain under ignored `reports/`.
 - `scripts/account_report.py` generates local account fact reports from ignored ledger SQLite.

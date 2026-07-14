@@ -31,7 +31,14 @@
 - `reports/RUN_ID/coach_note.md`
 - `reports/RUN_ID/research_pool.md`
 - `reports/RUN_ID/xueqiu_post.md`
-- 可选：只有在用户从研究池选择不超过 3 支后，才写 `reports/RUN_ID/trade_plan.md`
+- 可选：只有在用户从研究池选择不超过 3 支并写出简单操作计划后，才写具体个股的 `reports/RUN_ID/trade_plan.md`；未选择时保留等待状态，不写篮子级泛化预案。
+
+## 股票池与个人站、雪球的联动
+
+- 个人页股票池是唯一事实源，必须完整为 15 支可交易候选股。
+- 个人页股票名称链接到这 15 支股票对应的雪球行情/K 线页。
+- 发布个人页后，必须在已登录的 Google Chrome 中清空雪球原有自选，并加入完全相同的 15 支股票。
+- 必须核验雪球最终代码集合与个人页清单一致，并记录 `xueqiu_watchlist_sync.json` 为 `synced`；未完成同步不得结束本轮任务。
 
 然后执行：
 

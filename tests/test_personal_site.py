@@ -134,6 +134,10 @@ class TimelineIndexTests(unittest.TestCase):
         text = "今天先处理风险，不做预测。后续完整说明不应进入首页风险条。"
         self.assertEqual(site.first_sentence(text), "今天先处理风险，不做预测。")
 
+    def test_xueqiu_quote_url_uses_stock_exchange_prefix(self) -> None:
+        self.assertEqual(site.xueqiu_quote_url("600036"), "https://xueqiu.com/S/SH600036")
+        self.assertEqual(site.xueqiu_quote_url("301396"), "https://xueqiu.com/S/SZ301396")
+
     def test_markdown_reports_become_canonical_timeline_documents(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -179,6 +183,24 @@ class TimelineIndexTests(unittest.TestCase):
         self.assertEqual(quotes["300260"]["price"], 83.35)
         self.assertEqual(quotes["300260"]["date"], "2026-07-10")
         self.assertEqual(quotes["300260"]["source"], "run_20260710_review/market_snapshot.md")
+
+    def test_enriched_candidate_quote_is_used_when_snapshot_is_summary_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            reports = Path(tmp) / "reports"
+            run = reports / "run_20260713_close"
+            run.mkdir(parents=True)
+            (run / "enriched_candidate_universe.csv").write_text(
+                "stock_code,stock_name,latest_trade_date,close\n301396,宏景科技,2026-07-13,234.99\n",
+                encoding="utf-8",
+            )
+            quotes = site.extract_latest_quotes(
+                reports,
+                [{"stock_code": "301396", "stock_name": "宏景科技"}],
+            )
+
+        self.assertEqual(quotes["301396"]["price"], 234.99)
+        self.assertEqual(quotes["301396"]["date"], "2026-07-13")
+        self.assertEqual(quotes["301396"]["source"], "run_20260713_close/enriched_candidate_universe.csv")
 
 
 class WorkbenchArtifactTest(unittest.TestCase):
@@ -330,15 +352,46 @@ class WorkbenchArtifactTest(unittest.TestCase):
                     "stock_name": "新莱应材",
                     "theme": "持仓风险",
                     "buy_point": "风险修复观察",
+                    "ma_summary": "待核验",
                 },
                 {
                     "stock_code": "603259",
                     "stock_name": "药明康德",
                     "theme": "医疗研发外包",
                     "buy_point": "强轮动回踩",
+                    "ma_summary": "待核验",
                 },
             ],
         )
+
+    def test_research_pool_parser_accepts_dated_ma_header(self) -> None:
+        markdown = (
+            "| 股票 | 篮子/题材 | 2026-07-14 均线事实 | 观察触发 |\n"
+            "| --- | --- | --- | --- |\n"
+            "| 301396 宏景科技 | 国产算力 | 收盘 236.60；200 日线远上方 | 站稳 50 日线 |\n"
+        )
+
+        rows = site.extract_research_pool_candidates(markdown)
+
+        self.assertEqual(rows[0]["ma_summary"], "收盘 236.60；200 日线远上方")
+
+    def test_trade_plan_home_summary_only_accepts_selected_stock_plans(self) -> None:
+        markdown = (
+            "# 明日交易预案\n\n"
+            "## 已选个股预案 1\n\n"
+            "- 股票：301396 宏景科技\n"
+            "- 触发条件：站回日内均价线并出现板块扩散\n"
+            "- 一句话预案：若算力板块扩散且宏景站回均价线，则小仓观察；跌破 50 日线则按失效处理。\n\n"
+            "## 预案 2：医药篮子\n\n"
+            "- 股票：从 603259、300347 中选择 1 支\n"
+            "- 一句话预案：不应进入首页。\n"
+        )
+
+        summaries = site.extract_trade_plan_summaries(markdown)
+
+        self.assertEqual(len(summaries), 1)
+        self.assertEqual(summaries[0]["stock_code"], "301396")
+        self.assertIn("板块扩散", summaries[0]["summary"])
 
     def test_short_pool_stays_short_instead_of_inventing_candidates(self) -> None:
         markdown = "| 代码 | 名称 | 题材 | 买点 |\n| --- | --- | --- | --- |\n| 300001 | 候选1 | 先进封装 | 20日线 |"

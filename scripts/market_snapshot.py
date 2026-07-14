@@ -22,6 +22,12 @@ SINA_INDEX_SYMBOLS = {
     "sh000688": "科创50",
 }
 
+YAHOO_INDEX_SYMBOLS = {
+    "%5EGSPC": "标普500",
+    "%5EIXIC": "纳斯达克综合",
+    "%5ESOX": "费城半导体",
+}
+
 EASTMONEY_FIELDS = "f12,f14,f2,f3,f5,f6,f20,f21,f62"
 EASTMONEY_UT = "bd1d9ddb04089700cf9c27f6f7426281"
 MARKET_CACHE_DIR = Path("reports/market_cache")
@@ -98,6 +104,85 @@ def fetch_indices() -> tuple[list[dict[str, Any]], str]:
     return rows, url
 
 
+def fetch_us_indices() -> tuple[list[dict[str, Any]], str]:
+    rows: list[dict[str, Any]] = []
+    for symbol, name in YAHOO_INDEX_SYMBOLS.items():
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=5d"
+        payload = request_json(url)
+        result = ((payload.get("chart") or {}).get("result") or [None])[0] or {}
+        timestamps = result.get("timestamp") or []
+        quotes = ((result.get("indicators") or {}).get("quote") or [{}])[0]
+        closes = quotes.get("close") or []
+        valid = [(timestamp, close) for timestamp, close in zip(timestamps, closes) if close is not None]
+        if len(valid) < 2:
+            continue
+        _, current = valid[-1]
+        _, previous = valid[-2]
+        rows.append(
+            {
+                "symbol": symbol,
+                "name": name,
+                "price": round(float(current), 4),
+                "change_pct": round((float(current) - float(previous)) / float(previous) * 100, 2),
+                "provider": "yahoo_chart",
+            }
+        )
+    return rows, "yahoo_chart"
+
+
+def fetch_sina_stock_breadth(trade_date: str, batch_size: int = 500) -> tuple[list[dict[str, Any]], str]:
+    """Build whole-market breadth from public Sina quotes and BaoStock's symbol list.
+
+    Eastmoney's list endpoint is occasionally capped or disconnected. This
+    fallback uses public quote payloads in batches, so a 100-row response can
+    never silently masquerade as whole-market breadth.
+    """
+    baostock = importlib.import_module("baostock")
+    login = baostock.login()
+    if getattr(login, "error_code", "0") != "0":
+        raise RuntimeError(f"baostock login failed: {getattr(login, 'error_msg', '')}")
+    try:
+        result = baostock.query_all_stock(day=trade_date)
+        if getattr(result, "error_code", "0") != "0":
+            raise RuntimeError(f"baostock stock list failed: {getattr(result, 'error_msg', '')}")
+        symbols: list[str] = []
+        while result.next():
+            row = dict(zip(result.fields, result.get_row_data()))
+            code = str(row.get("code") or "")
+            trade_status = str(row.get("tradeStatus") or "1")
+            if trade_status != "1":
+                continue
+            if code.startswith(("sh.6", "sz.0", "sz.3")):
+                symbols.append(code.replace(".", ""))
+    finally:
+        baostock.logout()
+
+    rows: list[dict[str, Any]] = []
+    pattern = re.compile(r'var hq_str_([a-z0-9]+)="([^"]*)";')
+    for offset in range(0, len(symbols), batch_size):
+        batch = symbols[offset : offset + batch_size]
+        url = "https://hq.sinajs.cn/list=" + ",".join(batch)
+        text = request_text(url, encoding="gbk")
+        for symbol, payload in pattern.findall(text):
+            parts = payload.split(",")
+            if len(parts) < 4 or not parts[0]:
+                continue
+            previous = to_float(parts[2])
+            current = to_float(parts[3])
+            if previous in (None, 0) or current is None or current == 0:
+                continue
+            rows.append(
+                {
+                    "code": symbol[2:],
+                    "name": parts[0],
+                    "price": current,
+                    "change_pct": round((current - previous) / previous * 100, 2),
+                    "provider": "sina_stock_quote",
+                }
+            )
+    return rows, "sina_stock_quote+baostock_stock_list"
+
+
 def eastmoney_clist(fs: str, fid: str, limit: int) -> tuple[list[dict[str, Any]], str]:
     params = {
         "pn": "1",
@@ -133,7 +218,7 @@ def eastmoney_clist(fs: str, fid: str, limit: int) -> tuple[list[dict[str, Any]]
     return rows, url
 
 
-def fetch_ths_industry_summary(limit: int) -> tuple[list[dict[str, Any]], str]:
+def fetch_ths_industry_summary(limit: int, trade_date: str) -> tuple[list[dict[str, Any]], str]:
     errors: list[str] = []
     for _attempt in range(3):
         try:
@@ -165,9 +250,12 @@ def fetch_ths_industry_summary(limit: int) -> tuple[list[dict[str, Any]], str]:
             errors.append(f"{exc.__class__.__name__}: {exc}")
 
     cache = MARKET_CACHE_DIR / "ths_industry_summary.json"
-    if cache.exists():
+    cache_date = date.fromtimestamp(cache.stat().st_mtime).isoformat() if cache.exists() else ""
+    if cache.exists() and cache_date == trade_date:
         rows = json.loads(cache.read_text(encoding="utf-8"))
         return rows[:limit], "cache.akshare.stock_board_industry_summary_ths"
+    if cache.exists():
+        errors.append(f"cache is stale: {cache_date} != {trade_date}")
     raise RuntimeError("; ".join(errors))
 
 
@@ -212,6 +300,7 @@ def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         "verified": not args.offline,
         "data_sources": [],
         "major_indices": [],
+        "us_indices": [],
         "market_breadth": {},
         "sector_strength": [],
         "sector_weakness": [],
@@ -239,13 +328,35 @@ def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         snapshot["notes"].append(f"主要指数抓取失败：{exc.__class__.__name__}")
 
     try:
+        us_indices, source = fetch_us_indices()
+        snapshot["us_indices"] = us_indices
+        snapshot["data_sources"].append(source)
+    except Exception as exc:  # noqa: BLE001
+        snapshot["notes"].append(f"美股指数抓取失败：{exc.__class__.__name__}")
+
+    try:
         stocks, source = eastmoney_clist("m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23", "f3", args.breadth_limit)
-        snapshot["market_breadth"] = summarize_breadth(stocks)
+        breadth = summarize_breadth(stocks)
+        if breadth.get("total", 0) < 2000:
+            raise RuntimeError(f"Eastmoney breadth sample too small: {breadth.get('total')}")
+        snapshot["market_breadth"] = breadth
         snapshot["data_sources"].append(source)
     except Exception as exc:  # noqa: BLE001
         snapshot["status"] = "partial"
         snapshot["verified"] = False
-        snapshot["notes"].append(f"市场宽度抓取失败：{exc.__class__.__name__}")
+        snapshot["notes"].append(f"Eastmoney 市场宽度不可用：{exc.__class__.__name__}")
+        try:
+            stocks, source = fetch_sina_stock_breadth(args.trade_date)
+            breadth = summarize_breadth(stocks)
+            if breadth.get("total", 0) < 2000:
+                raise RuntimeError(f"Sina breadth sample too small: {breadth.get('total')}")
+            snapshot["market_breadth"] = breadth
+            snapshot["data_sources"].append(source)
+            snapshot["status"] = "ok" if snapshot["major_indices"] else "partial"
+            snapshot["verified"] = bool(snapshot["major_indices"])
+            snapshot["notes"].append("市场宽度已切换为 Sina 公共报价 + BaoStock 股票列表兜底。")
+        except Exception as fallback_exc:  # noqa: BLE001
+            snapshot["notes"].append(f"Sina/BaoStock 市场宽度兜底失败：{fallback_exc.__class__.__name__}")
 
     try:
         industries, source = eastmoney_clist("m:90+t:2", "f3", args.sector_limit)
@@ -255,7 +366,7 @@ def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         snapshot["notes"].append(f"Eastmoney 行业板块抓取失败：{exc.__class__.__name__}")
         try:
-            industries, source = fetch_ths_industry_summary(args.sector_limit)
+            industries, source = fetch_ths_industry_summary(args.sector_limit, args.trade_date)
             snapshot["sector_strength"] = industries[: min(10, len(industries))]
             snapshot["sector_weakness"] = list(reversed(industries[-min(10, len(industries)) :]))
             if not snapshot.get("market_breadth") and any(row.get("up_count") is not None for row in industries):
@@ -267,6 +378,16 @@ def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
             snapshot["status"] = "partial"
             snapshot["verified"] = False
             snapshot["notes"].append(f"行业板块 fallback 抓取失败：{fallback_exc.__class__.__name__}")
+
+    # Indexes and whole-market breadth are the hard market facts. If those
+    # are complete, keep the snapshot usable and require the article digest
+    # to supply current policy/industry/overseas context instead of silently
+    # reusing stale sector cache data.
+    if snapshot["major_indices"] and snapshot.get("market_breadth", {}).get("total", 0) >= 2000:
+        snapshot["status"] = "ok"
+        snapshot["verified"] = True
+        if not snapshot["sector_strength"] or not snapshot["sector_weakness"]:
+            snapshot["notes"].append("当日行业板块未从行情接口取得；必须由文章摘要补齐产业、政策和海外映射。")
 
     if snapshot["status"] == "partial":
         snapshot["notes"].append("市场背景部分联网验证；缺失项不得硬编。")
@@ -287,6 +408,9 @@ def markdown(snapshot: dict[str, Any]) -> str:
     ]
     for row in snapshot.get("major_indices", []):
         lines.append(f"| {row.get('name','')} | {row.get('price','')} | {row.get('change_pct','')} | {row.get('quote_time','')} |")
+    lines.extend(["", "## 美股映射", "", "| 指数 | 最新 | 涨跌幅 |", "| --- | ---: | ---: |"])
+    for row in snapshot.get("us_indices", []):
+        lines.append(f"| {row.get('name','')} | {row.get('price','')} | {row.get('change_pct','')}% |")
     lines.extend(["", "## 市场宽度", "", json.dumps(snapshot.get("market_breadth", {}), ensure_ascii=False, indent=2), "", "## 强势板块", ""])
     for row in snapshot.get("sector_strength", [])[:10]:
         extra = ""
