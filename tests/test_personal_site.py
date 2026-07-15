@@ -202,6 +202,55 @@ class TimelineIndexTests(unittest.TestCase):
         self.assertEqual(quotes["301396"]["date"], "2026-07-13")
         self.assertEqual(quotes["301396"]["source"], "run_20260713_close/enriched_candidate_universe.csv")
 
+    def test_latest_enriched_variant_quote_wins_when_current_pool_omits_position(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            reports = Path(tmp) / "reports"
+            old_run = reports / "run_20260714_close"
+            new_run = reports / "run_20260715_close"
+            old_run.mkdir(parents=True)
+            new_run.mkdir(parents=True)
+            (old_run / "enriched_candidate_universe.csv").write_text(
+                "stock_code,stock_name,latest_trade_date,close\n300604,长川科技,2026-07-14,335.62\n",
+                encoding="utf-8",
+            )
+            (new_run / "enriched_candidate_universe.csv").write_text(
+                "stock_code,stock_name,latest_trade_date,close\n000063,中兴通讯,2026-07-15,39.45\n",
+                encoding="utf-8",
+            )
+            (new_run / "enriched_candidate_universe_all.csv").write_text(
+                "stock_code,stock_name,latest_trade_date,close\n300604,长川科技,2026-07-15,304.44\n",
+                encoding="utf-8",
+            )
+
+            quotes = site.extract_latest_quotes(
+                reports,
+                [{"stock_code": "300604", "stock_name": "长川科技", "last_buy_date": "2026-07-15"}],
+            )
+
+        self.assertEqual(quotes["300604"]["price"], 304.44)
+        self.assertEqual(quotes["300604"]["date"], "2026-07-15")
+        self.assertEqual(
+            quotes["300604"]["source"],
+            "run_20260715_close/enriched_candidate_universe_all.csv",
+        )
+
+    def test_quote_before_last_buy_date_is_not_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            reports = Path(tmp) / "reports"
+            run = reports / "run_20260714_close"
+            run.mkdir(parents=True)
+            (run / "enriched_candidate_universe.csv").write_text(
+                "stock_code,stock_name,latest_trade_date,close\n300604,长川科技,2026-07-14,335.62\n",
+                encoding="utf-8",
+            )
+
+            quotes = site.extract_latest_quotes(
+                reports,
+                [{"stock_code": "300604", "stock_name": "长川科技", "last_buy_date": "2026-07-15"}],
+            )
+
+        self.assertNotIn("300604", quotes)
+
 
 class WorkbenchArtifactTest(unittest.TestCase):
     def test_explicit_target_date_beats_run_directory_date(self) -> None:

@@ -490,6 +490,11 @@ def extract_latest_quotes(reports_dir: Path, positions: list[dict[str, Any]]) ->
         for position in positions
         if position.get("stock_code")
     }
+    minimum_quote_dates = {
+        str(position.get("stock_code") or ""): valid_iso_date(position.get("last_buy_date"))
+        for position in positions
+        if position.get("stock_code")
+    }
     if not wanted:
         return {}
     snapshots = sorted(
@@ -501,10 +506,26 @@ def extract_latest_quotes(reports_dir: Path, positions: list[dict[str, Any]]) ->
     quote_pattern = re.compile(
         r"^\s*-\s*(?:(?P<code>\d{6})\s+)?(?P<name>[^:：]+)[:：].*?收盘\s*(?P<price>\d+(?:\.\d+)?)"
     )
+
+    def consider_quote(code: str, price: float, quote_date: str, source: str) -> None:
+        normalized_date = valid_iso_date(quote_date)
+        minimum_date = minimum_quote_dates.get(code, "")
+        if not normalized_date or (minimum_date and normalized_date < minimum_date):
+            return
+        existing_date = valid_iso_date((quotes.get(code) or {}).get("date"))
+        if existing_date and normalized_date <= existing_date:
+            return
+        quotes[code] = {
+            "stock_code": code,
+            "stock_name": wanted[code],
+            "price": round(price, 4),
+            "date": normalized_date,
+            "source": source,
+        }
+
     for path in snapshots:
-        if len(quotes) == len(wanted):
-            break
         rel = path.relative_to(reports_dir)
+        quote_date = infer_date(rel)
         for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
             match = quote_pattern.search(line)
             if not match:
@@ -514,46 +535,40 @@ def extract_latest_quotes(reports_dir: Path, positions: list[dict[str, Any]]) ->
             if matched_name.startswith("XD"):
                 matched_name = matched_name[2:]
             for code, name in wanted.items():
-                if code in quotes:
-                    continue
                 if matched_code == code or (name and matched_name == name):
-                    quotes[code] = {
-                        "stock_code": code,
-                        "stock_name": name,
-                        "price": round(float(match.group("price")), 4),
-                        "date": infer_date(rel),
-                        "source": str(rel).replace("\\", "/"),
-                    }
+                    consider_quote(
+                        code,
+                        float(match.group("price")),
+                        quote_date,
+                        str(rel).replace("\\", "/"),
+                    )
     # Candidate enrichment is the canonical per-stock quote source. The
     # market snapshot intentionally summarizes indexes and breadth, so it
     # does not contain every held stock's close.
     enriched_files = sorted(
-        reports_dir.rglob("enriched_candidate_universe.csv"),
+        reports_dir.rglob("enriched_candidate_universe*.csv"),
         key=lambda path: (infer_date(path.relative_to(reports_dir)), path.stat().st_mtime),
         reverse=True,
     )
     for path in enriched_files:
-        if len(quotes) == len(wanted):
-            break
         try:
             with path.open(newline="", encoding="utf-8-sig") as handle:
                 rows = csv.DictReader(handle)
                 for row in rows:
                     code = str(row.get("stock_code") or row.get("code") or "").strip()
                     close = row.get("close")
-                    if code not in wanted or code in quotes or not close:
+                    if code not in wanted or not close:
                         continue
                     try:
                         price = round(float(close), 4)
                     except (TypeError, ValueError):
                         continue
-                    quotes[code] = {
-                        "stock_code": code,
-                        "stock_name": wanted[code],
-                        "price": price,
-                        "date": str(row.get("latest_trade_date") or infer_date(path.relative_to(reports_dir))),
-                        "source": str(path.relative_to(reports_dir)).replace("\\", "/"),
-                    }
+                    consider_quote(
+                        code,
+                        price,
+                        str(row.get("latest_trade_date") or infer_date(path.relative_to(reports_dir))),
+                        str(path.relative_to(reports_dir)).replace("\\", "/"),
+                    )
         except (OSError, csv.Error):
             continue
     return quotes
