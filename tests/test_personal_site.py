@@ -755,11 +755,56 @@ class SiteGenerationTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            (state / "mentor_lenses.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "mentor": {
+                            "id": "bingbing-xiaomei",
+                            "name": "冰冰小美",
+                            "profile_url": "https://xueqiu.com/u/7143769715",
+                            "summary": "风险优先的宏观产业交易视角。",
+                            "updated_at": "2026-07-19",
+                            "notice": "基于公开表达整理，非本人授权或收益背书。",
+                            "principles": [
+                                {
+                                    "name": "风险先于机会",
+                                    "summary": "先判断环境，再决定仓位。",
+                                    "source_url": "https://xueqiu.com/7143769715/319174752",
+                                }
+                            ],
+                            "modes": [
+                                {
+                                    "id": "macro-risk-gate",
+                                    "name": "宏观风险闸门",
+                                    "horizon": "portfolio",
+                                    "evidence": "behavior",
+                                    "environment": ["海外与流动性风险升高"],
+                                    "signals": ["汇率、利率、融资余额"],
+                                    "actions": ["降低总仓位"],
+                                    "exit_conditions": ["风险停止扩散"],
+                                    "anti_patterns": ["用个股利好覆盖系统风险"],
+                                    "source_urls": ["https://xueqiu.com/7143769715/396191476"],
+                                }
+                            ],
+                            "risk_prompts": [
+                                {
+                                    "id": "risk-first",
+                                    "text": "驱动没有修复，反弹也可能只是情绪回摆。先把仓位放到能承受判断错误的位置。",
+                                    "source_url": "https://xueqiu.com/7143769715/319174752",
+                                }
+                            ],
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
 
             written = site.write_site(sqlite_path, reports, output, state_dir=state, as_of_date=date(2026, 7, 11))
             assert_generated_site_integrity(self, output)
 
-            expected_pages = {"index", "timeline", "stories", "modes", "ledger", "rules", "data"}
+            expected_pages = {"index", "timeline", "stories", "modes", "mentor", "ledger", "rules", "data"}
             self.assertTrue(expected_pages.issubset(written))
             for key in expected_pages:
                 self.assertTrue(written[key].exists(), key)
@@ -768,6 +813,7 @@ class SiteGenerationTests(unittest.TestCase):
             timeline_html = written["timeline"].read_text(encoding="utf-8")
             stories_html = written["stories"].read_text(encoding="utf-8")
             modes_html = written["modes"].read_text(encoding="utf-8")
+            mentor_html = written["mentor"].read_text(encoding="utf-8")
             ledger_html = written["ledger"].read_text(encoding="utf-8")
             ledger_js_exists = (output / "assets" / "ledger.js").exists()
             rules_html = written["rules"].read_text(encoding="utf-8")
@@ -783,6 +829,7 @@ class SiteGenerationTests(unittest.TestCase):
 
         self.assertIn('href="timeline.html"', index_html)
         self.assertIn('href="modes.html"', index_html)
+        self.assertIn('href="mentor.html"', index_html)
         self.assertIn("交易模式", modes_html)
         self.assertIn('data-mode-app', modes_html)
         self.assertIn('data-mode-filter="validating"', modes_html)
@@ -804,6 +851,13 @@ class SiteGenerationTests(unittest.TestCase):
         )
         self.assertIn(f'href="stocks/000001.html?cycle={closed_cycle_id}"', modes_html)
         self.assertNotIn("自动升级", modes_html)
+        self.assertIn("冰冰小美交易视角", mentor_html)
+        self.assertIn('data-mentor-app', mentor_html)
+        self.assertIn('id="mentor-mode-macro-risk-gate"', mentor_html)
+        self.assertIn('data-mentor-filter="portfolio"', mentor_html)
+        self.assertIn("行为证据", mentor_html)
+        self.assertIn("视角改写 · 非本人原话", index_html)
+        self.assertIn("驱动没有修复", index_html)
         self.assertIn("总盈亏（含持仓）", index_html)
         self.assertIn("¥316.00", index_html)
         self.assertIn("总费用", index_html)

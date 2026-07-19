@@ -27,7 +27,7 @@ from ledger_analytics import (
     number,
 )
 from personal_site_metrics import summarize_cycles
-from personal_site_state import load_discipline_feed, load_trading_modes
+from personal_site_state import load_discipline_feed, load_mentor_lenses, load_trading_modes
 from render_markdown import render_markdown
 
 
@@ -65,6 +65,7 @@ NAV_ITEMS = (
     ("timeline", "训练时间线", "timeline.html"),
     ("stories", "股票故事", "stories.html"),
     ("modes", "交易模式", "modes.html"),
+    ("mentor", "导师视角", "mentor.html"),
     ("ledger", "交易底账", "ledger.html"),
     ("rules", "纪律规则", "rules.html"),
 )
@@ -844,7 +845,12 @@ def build_data(
 
     documents = collect_timeline_documents(reports_dir, output_dir)
     trading_state = load_trading_modes(state_dir / "trading_modes.json", {row["cycle_id"]: row for row in cycles})
+    mentor_state = load_mentor_lenses(state_dir / "mentor_lenses.json")
     discipline_feed = load_discipline_feed(state_dir / "discipline_feed.json")
+    discipline_feed = {
+        **discipline_feed,
+        "messages": [*discipline_feed.get("messages", []), *mentor_prompt_messages(mentor_state)],
+    }
     state_source_documents = map_state_source_documents(trading_state, discipline_feed, documents)
     target_date = resolve_workbench_target_date(documents, as_of_date or datetime.now().date())
     selected_plan = select_daily_document(documents, "trade_plan", target_date)
@@ -906,6 +912,7 @@ def build_data(
         "ledger_dataset": ledger_dataset,
         "trading_state": trading_state,
         "discipline_feed": discipline_feed,
+        "mentor_state": mentor_state,
         "state_source_documents": state_source_documents,
         "workbench": {
             "target_date": target_date,
@@ -1059,6 +1066,19 @@ EVIDENCE_DIRECTION_COPY = {
     "indeterminate": "无法判断",
 }
 
+MENTOR_HORIZON_COPY = {
+    "portfolio": "组合仓位",
+    "long_cycle": "长期周期",
+    "swing": "波段轮换",
+    "short_term": "短线战术",
+}
+
+MENTOR_EVIDENCE_COPY = {
+    "behavior": "行为证据",
+    "method": "本人方法",
+    "synthesis": "研究推导",
+}
+
 
 def safe_relative_href(value: Any) -> str | None:
     raw = str(value or "").strip()
@@ -1208,20 +1228,28 @@ def discipline_meta(message: dict[str, Any], source_documents: dict[str, str]) -
     level = "红牌" if message.get("level") == "red_card" else "提醒"
     created_at = str(message.get("created_at") or "待核验")
     source = str(message.get("source_path") or "")
+    source_url = str(message.get("source_url") or "")
     href = source_documents.get(source)
-    if href and safe_relative_href(href):
+    if source_url.startswith("https://xueqiu.com/7143769715/"):
+        source_html = f'<a href="{esc(source_url)}" target="_blank" rel="noopener">原始视角</a>'
+    elif href and safe_relative_href(href):
         source_html = f'<a href="{esc(href)}">来源</a>'
     elif source:
         source_html = f'<span>来源：{esc(source)}</span>'
     else:
         source_html = "<span>暂无来源</span>"
-    return f'<small><span>{level}</span><time class="mono">{esc(created_at)}</time>{source_html}</small>'
+    mentor_label = (
+        f'<span class="mentor-message-label">{esc(message.get("mentor_name"))}视角改写 · 非本人原话</span>'
+        if message.get("mentor_name")
+        else f"<span>{level}</span>"
+    )
+    return f'<small>{mentor_label}<time class="mono">{esc(created_at)}</time>{source_html}</small>'
 
 
 def render_discipline_feed(feed: dict[str, Any], source_documents: dict[str, str] | None = None) -> str:
     source_documents = source_documents or {}
     messages = [
-        f'<article class="discipline-message"><p>{esc(message.get("message"))}</p>{discipline_meta(message, source_documents)}</article>'
+        f'<article class="discipline-message{" mentor-message" if message.get("mentor_name") else ""}"><p>{esc(message.get("message"))}</p>{discipline_meta(message, source_documents)}</article>'
         for message in feed.get("messages", [])
     ]
     if messages:
@@ -1231,6 +1259,24 @@ def render_discipline_feed(feed: dict[str, Any], source_documents: dict[str, str
     else:
         body = '<div class="discipline-empty">暂无已发布纪律消息</div>'
     return f'<div class="discipline-feed" data-discipline-feed aria-live="polite">{body}</div>'
+
+
+def mentor_prompt_messages(mentor_state: dict[str, Any]) -> list[dict[str, Any]]:
+    mentor = mentor_state.get("mentor", {})
+    updated_at = str(mentor.get("updated_at") or "待核验")
+    name = str(mentor.get("name") or "导师")
+    return [
+        {
+            "id": f"mentor-{prompt.get('id')}",
+            "level": "reminder",
+            "message": prompt.get("text"),
+            "created_at": updated_at,
+            "source_path": "",
+            "source_url": prompt.get("source_url"),
+            "mentor_name": name,
+        }
+        for prompt in mentor.get("risk_prompts", [])
+    ]
 
 
 def render_workbench(data: dict[str, Any]) -> str:
@@ -1443,6 +1489,79 @@ def render_modes(data: dict[str, Any]) -> str:
         <nav class="pagination" aria-label="模式分页"><button type="button" data-page-prev>上一页</button><span id="modePage" class="mono"></span><button type="button" data-page-next>下一页</button></nav>
       </section>
     """
+
+
+def mentor_source_links(urls: list[str]) -> str:
+    links = [
+        f'<a href="{esc(url)}" target="_blank" rel="noopener">证据 {index}</a>'
+        for index, url in enumerate(urls, start=1)
+    ]
+    return '<div class="mentor-sources">' + "".join(links) + "</div>"
+
+
+def render_mentor(data: dict[str, Any]) -> str:
+    state = data.get("mentor_state", {})
+    mentor = state.get("mentor", {})
+    modes = mentor.get("modes", [])
+    counts = Counter(str(mode.get("horizon") or "") for mode in modes)
+    filters = [
+        f'<button type="button" data-mentor-filter="all" aria-pressed="true">全部 <span>{len(modes)}</span></button>'
+    ]
+    for horizon in ("portfolio", "long_cycle", "swing", "short_term"):
+        filters.append(
+            f'<button type="button" data-mentor-filter="{horizon}" aria-pressed="false">{esc(MENTOR_HORIZON_COPY[horizon])} <span>{counts.get(horizon, 0)}</span></button>'
+        )
+
+    principles = "".join(
+        f'''<a class="mentor-principle" href="{esc(item.get('source_url'))}" target="_blank" rel="noopener">
+          <strong>{esc(item.get('name'))}</strong><span>{esc(item.get('summary'))}</span>
+        </a>'''
+        for item in mentor.get("principles", [])
+    )
+    mode_rows = []
+    for mode in modes:
+        mode_id = str(mode.get("id") or "")
+        horizon = str(mode.get("horizon") or "portfolio")
+        evidence = str(mode.get("evidence") or "synthesis")
+        search = " ".join(
+            [
+                str(mode.get("name") or ""),
+                mode_id,
+                *[str(value) for field in ("environment", "signals", "actions", "exit_conditions", "anti_patterns") for value in mode.get(field, [])],
+            ]
+        )
+        definitions = "".join(
+            (
+                mode_definition_row("适用环境", mode.get("environment")),
+                mode_definition_row("观察信号", mode.get("signals")),
+                mode_definition_row("执行动作", mode.get("actions")),
+                mode_definition_row("退出 / 降级", mode.get("exit_conditions")),
+                mode_definition_row("明确不做", mode.get("anti_patterns")),
+            )
+        )
+        mode_rows.append(
+            f'''<article class="mentor-mode-entry" id="mentor-mode-{esc(mode_id)}" data-mentor-item data-horizon="{esc(horizon)}" data-search="{esc(search)}">
+              <header class="mentor-mode-heading"><div><span class="page-context mono">{esc(mode_id)}</span><h2>{esc(mode.get('name') or mode_id)}</h2></div><div class="mentor-tags"><span>{esc(MENTOR_HORIZON_COPY.get(horizon, horizon))}</span><strong>{esc(MENTOR_EVIDENCE_COPY.get(evidence, evidence))}</strong></div></header>
+              <dl class="mode-definitions">{definitions}</dl>
+              {mentor_source_links(mode.get('source_urls', []))}
+            </article>'''
+        )
+    error_html = '<div class="empty-state">导师视角数据待修复。</div>' if state.get("error") else ""
+    empty_html = '<div class="empty-state">尚未建立导师交易模式。</div>' if not modes and not state.get("error") else ""
+    return f'''
+      <header class="page-heading"><div><span class="page-context mono">MENTOR LENS / {esc(mentor.get('updated_at') or '待核验')}</span><h1>{esc(mentor.get('name') or '导师')}交易视角</h1><p>{esc(mentor.get('summary') or '公开资料尚未整理。')}</p></div><a class="text-action" href="{esc(mentor.get('profile_url') or '#')}" target="_blank" rel="noopener">查看雪球主页</a></header>
+      <section class="mentor-notice"><strong>使用边界</strong><p>{esc(mentor.get('notice') or '该页面只用于研究，不构成交易建议。')}</p></section>
+      <section class="mentor-principles" aria-label="核心原则">{principles}</section>
+      <section class="filter-surface mentor-filter-surface" data-mentor-app data-page-size="6">
+        <div class="filter-row"><label class="field"><span>搜索交易模式</span><input id="mentorSearch" type="search" placeholder="环境、信号、动作或失效条件…" autocomplete="off"></label></div>
+        <div class="segmented" role="group" aria-label="交易周期">{''.join(filters)}</div>
+        <div class="result-status" id="mentorStatus" aria-live="polite"></div>
+        <div class="mentor-mode-list">{''.join(mode_rows)}</div>
+        {error_html}{empty_html}
+        <div class="empty-state" id="mentorEmpty" hidden>没有符合条件的导师交易模式。</div>
+        <nav class="pagination" aria-label="导师模式分页"><button type="button" data-page-prev>上一页</button><span id="mentorPage" class="mono"></span><button type="button" data-page-next>下一页</button></nav>
+      </section>
+    '''
 
 
 def trade_rows_html(trades: list[dict[str, Any]], prefix: str = "") -> str:
@@ -1713,6 +1832,7 @@ def public_site_data(data: dict[str, Any]) -> dict[str, Any]:
         "trading_state": data["trading_state"],
         "modes": data["trading_state"].get("modes", []),
         "discipline_feed": data["discipline_feed"],
+        "mentor_state": data["mentor_state"],
         "state_source_documents": data["state_source_documents"],
         "workbench": data["workbench"],
         "generated_at": data["generated_at"],
@@ -1743,6 +1863,7 @@ def write_site(
         "timeline": output_dir / "timeline.html",
         "stories": output_dir / "stories.html",
         "modes": output_dir / "modes.html",
+        "mentor": output_dir / "mentor.html",
         "ledger": output_dir / "ledger.html",
         "rules": output_dir / "rules.html",
         "data": output_dir / "site_data.json",
@@ -1751,6 +1872,7 @@ def write_site(
     pages["timeline"].write_text(page_shell("训练时间线", "timeline", render_timeline(data), data["generated_at"]), encoding="utf-8")
     pages["stories"].write_text(page_shell("股票故事", "stories", render_stories(data), data["generated_at"]), encoding="utf-8")
     pages["modes"].write_text(page_shell("交易模式", "modes", render_modes(data), data["generated_at"]), encoding="utf-8")
+    pages["mentor"].write_text(page_shell("导师视角", "mentor", render_mentor(data), data["generated_at"]), encoding="utf-8")
     pages["ledger"].write_text(
         page_shell(
             "交易底账",
@@ -1794,7 +1916,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     args = parser.parse_args()
     written = write_site(args.sqlite, args.reports, args.output, state_dir=args.state)
-    for key in ("index", "timeline", "stories", "modes", "ledger", "rules", "data"):
+    for key in ("index", "timeline", "stories", "modes", "mentor", "ledger", "rules", "data"):
         print(f"{key}: {written[key]}")
     return 0
 

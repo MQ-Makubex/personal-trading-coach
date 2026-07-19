@@ -186,6 +186,71 @@
     render();
   }
 
+  function initMentor() {
+    const root = document.querySelector('[data-mentor-app]');
+    if (!root) return;
+    const items = Array.from(root.querySelectorAll('[data-mentor-item]'));
+    const buttons = Array.from(root.querySelectorAll('[data-mentor-filter]'));
+    const queryInput = root.querySelector('#mentorSearch');
+    const statusLabel = root.querySelector('#mentorStatus');
+    const empty = root.querySelector('#mentorEmpty');
+    const pageLabel = root.querySelector('#mentorPage');
+    const previous = root.querySelector('[data-page-prev]');
+    const next = root.querySelector('[data-page-next]');
+    const pageSize = Number(root.dataset.pageSize) || 6;
+    const allowedHorizons = new Set(['all', 'portfolio', 'long_cycle', 'swing', 'short_term']);
+    let horizon = params.get('horizon') || 'all';
+    if (!allowedHorizons.has(horizon)) horizon = 'all';
+    let query = params.get('q') || '';
+    let page = Number(params.get('page')) || 1;
+    queryInput.value = query;
+
+    function render() {
+      const normalizedQuery = normalize(query);
+      const filtered = items.filter(item => {
+        const horizonOk = horizon === 'all' || item.dataset.horizon === horizon;
+        const queryOk = !normalizedQuery || normalize(item.dataset.search).includes(normalizedQuery);
+        return horizonOk && queryOk;
+      });
+      const result = paginate(filtered, page, pageSize);
+      page = result.page;
+      showPage(items, filtered, result, null, pageLabel, previous, next);
+      empty.hidden = items.length === 0 || filtered.length !== 0;
+      statusLabel.textContent = filtered.length ? `显示 ${filtered.length} 个模式` : (items.length ? '没有匹配结果' : '0 个模式');
+      setPressed(buttons, horizon, 'mentorFilter');
+      updateUrl({horizon, q: query, page: String(page)});
+    }
+
+    buttons.forEach(button => button.addEventListener('click', () => {
+      horizon = button.dataset.mentorFilter;
+      page = 1;
+      render();
+    }));
+    queryInput.addEventListener('input', () => { query = queryInput.value; page = 1; render(); });
+    previous.addEventListener('click', () => { page -= 1; render(); });
+    next.addEventListener('click', () => { page += 1; render(); });
+    render();
+  }
+
+  function initDisciplineFeed() {
+    const feed = document.querySelector('[data-discipline-feed]');
+    if (!feed || feed.children.length < 2 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    let paused = false;
+    const pause = () => { paused = true; };
+    const resume = () => { paused = false; };
+    feed.addEventListener('mouseenter', pause);
+    feed.addEventListener('mouseleave', resume);
+    feed.addEventListener('focusin', pause);
+    feed.addEventListener('focusout', resume);
+    window.setInterval(() => {
+      if (paused || document.hidden) return;
+      const messages = Array.from(feed.querySelectorAll('.discipline-message'));
+      const baseOffset = messages[0].offsetTop;
+      const next = messages.find(message => message.offsetTop > baseOffset + feed.scrollTop + 8) || messages[0];
+      feed.scrollTo({top: next.offsetTop - baseOffset, behavior: 'smooth'});
+    }, 6000);
+  }
+
   function initLedger() {
     const root = document.querySelector('[data-ledger-app]');
     if (!root) return;
@@ -322,6 +387,8 @@
   initTimeline();
   initStories();
   initModes();
+  initMentor();
+  initDisciplineFeed();
   initLedger();
   initPnlTable();
   initRules();

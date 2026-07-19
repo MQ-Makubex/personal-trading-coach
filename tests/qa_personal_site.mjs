@@ -27,6 +27,10 @@ async function inspect(name, viewport) {
     };
   });
   await page.screenshot({path: path.join(outputDir, `home-${name}.png`), fullPage: true});
+  const disciplineStart = await page.locator('[data-discipline-feed]').evaluate(node => node.scrollTop);
+  await page.waitForTimeout(6500);
+  const disciplineEnd = await page.locator('[data-discipline-feed]').evaluate(node => node.scrollTop);
+  home.disciplineAutoScrolls = disciplineEnd > disciplineStart;
 
   await page.goto(`${baseUrl}/ledger.html?grain=month&period=2026-07`, {waitUntil: 'networkidle'});
   const ledgerAccountFact = () => page.locator('[data-current-account-facts] .metric-primary > strong').textContent();
@@ -72,6 +76,16 @@ async function inspect(name, viewport) {
   await page.goto(`${baseUrl}/modes.html`, {waitUntil: 'networkidle'});
   await page.locator('[data-mode-filter="validating"]').click();
   const modeUrlUpdated = page.url().includes('status=validating');
+  await page.goto(`${baseUrl}/mentor.html`, {waitUntil: 'networkidle'});
+  const mentorSkipLinkHidden = await page.locator('.skip-link').evaluate(node => node.getBoundingClientRect().bottom <= 0);
+  const mentorModeCountCorrect = await page.locator('[data-mentor-item]').count() === 13;
+  await page.locator('[data-mentor-filter="short_term"]').click();
+  const mentorUrlUpdated = page.url().includes('horizon=short_term');
+  const mentorVisibleCards = await page.locator('[data-mentor-item]:visible').count();
+  const mentorFilterWorks = mentorVisibleCards === 4;
+  await page.locator('#mentorSearch').fill('做T');
+  const mentorSearchWorks = await page.locator('[data-mentor-item]:visible').count() === 1;
+  await page.screenshot({path: path.join(outputDir, `mentor-${name}.png`), fullPage: true});
   const fixedAccountFacts = [
     totalBefore,
     ledgerTotal,
@@ -90,7 +104,12 @@ async function inspect(name, viewport) {
     searchUrlUpdated,
     storyExists,
     cycleUrlUpdated,
-    modeUrlUpdated
+    modeUrlUpdated,
+    mentorSkipLinkHidden,
+    mentorModeCountCorrect,
+    mentorUrlUpdated,
+    mentorFilterWorks,
+    mentorSearchWorks
   });
 }
 

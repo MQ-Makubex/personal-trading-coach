@@ -9,7 +9,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 
 GATE_STATUSES = {"pending", "locked", "observe", "eligible"}
@@ -21,6 +21,8 @@ EVIDENCE_TYPES = {"formal", "historical_reference"}
 MESSAGE_STATUSES = {"draft", "active", "archived"}
 MESSAGE_LEVELS = {"red_card", "reminder"}
 MESSAGE_SCOPES = {"global", "stock", "mode"}
+MENTOR_HORIZONS = {"portfolio", "long_cycle", "swing", "short_term"}
+MENTOR_EVIDENCE = {"behavior", "method", "synthesis"}
 
 
 class StateValidationError(ValueError):
@@ -45,6 +47,24 @@ def default_trading_modes() -> dict[str, Any]:
 
 def default_discipline_feed() -> dict[str, Any]:
     return {"version": 1, "messages": [], "error": None}
+
+
+def default_mentor_lenses() -> dict[str, Any]:
+    return {
+        "version": 1,
+        "mentor": {
+            "id": "",
+            "name": "",
+            "profile_url": "",
+            "summary": "",
+            "updated_at": "",
+            "notice": "",
+            "principles": [],
+            "modes": [],
+            "risk_prompts": [],
+        },
+        "error": None,
+    }
 
 
 def canonical_project_relative_path(value: str) -> str:
@@ -112,6 +132,18 @@ def _require_relative_path(value: Any, field: str) -> str:
         return canonical_project_relative_path(path)
     except StateValidationError as exc:
         raise StateValidationError(field) from exc
+
+
+def _require_xueqiu_url(value: Any, field: str) -> str:
+    url = _require_string(value, field)
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or parsed.hostname != "xueqiu.com":
+        raise StateValidationError(field)
+    if parsed.username or parsed.password or parsed.port:
+        raise StateValidationError(field)
+    if not (parsed.path.startswith("/7143769715/") or parsed.path == "/u/7143769715"):
+        raise StateValidationError(field)
+    return url
 
 
 def _require_version(value: Any) -> int:
@@ -323,3 +355,87 @@ def load_discipline_feed(path: Path, now: datetime | None = None) -> dict[str, A
         return {"version": 1, "messages": [row[0] for row in active], "error": None}
     except (TypeError, ValueError):
         return _repair(default_discipline_feed(), "字段格式无效")
+
+
+def _validate_mentor_principle(value: Any) -> dict[str, str]:
+    principle = _require_mapping(value, "mentor.principle")
+    return {
+        "name": _require_string(principle.get("name"), "mentor.principle.name"),
+        "summary": _require_string(principle.get("summary"), "mentor.principle.summary"),
+        "source_url": _require_xueqiu_url(principle.get("source_url"), "mentor.principle.source_url"),
+    }
+
+
+def _validate_mentor_mode(value: Any) -> dict[str, Any]:
+    mode = _require_mapping(value, "mentor.mode")
+    return {
+        "id": _require_string(mode.get("id"), "mentor.mode.id"),
+        "name": _require_string(mode.get("name"), "mentor.mode.name"),
+        "horizon": _require_enum(mode.get("horizon"), "mentor.mode.horizon", MENTOR_HORIZONS),
+        "evidence": _require_enum(mode.get("evidence"), "mentor.mode.evidence", MENTOR_EVIDENCE),
+        "environment": _require_string_list(mode.get("environment"), "mentor.mode.environment"),
+        "signals": _require_string_list(mode.get("signals"), "mentor.mode.signals"),
+        "actions": _require_string_list(mode.get("actions"), "mentor.mode.actions"),
+        "exit_conditions": _require_string_list(mode.get("exit_conditions"), "mentor.mode.exit_conditions"),
+        "anti_patterns": _require_string_list(mode.get("anti_patterns"), "mentor.mode.anti_patterns"),
+        "source_urls": [
+            _require_xueqiu_url(url, "mentor.mode.source_urls")
+            for url in _require_list(mode.get("source_urls"), "mentor.mode.source_urls")
+        ],
+    }
+
+
+def _validate_mentor_prompt(value: Any) -> dict[str, str]:
+    prompt = _require_mapping(value, "mentor.risk_prompt")
+    return {
+        "id": _require_string(prompt.get("id"), "mentor.risk_prompt.id"),
+        "text": _require_string(prompt.get("text"), "mentor.risk_prompt.text"),
+        "source_url": _require_xueqiu_url(prompt.get("source_url"), "mentor.risk_prompt.source_url"),
+    }
+
+
+def load_mentor_lenses(path: Path) -> dict[str, Any]:
+    """Load a validated public-mentor research lens without exposing private trading state."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return default_mentor_lenses()
+    except OSError:
+        return _repair(default_mentor_lenses(), "读取失败")
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return _repair(default_mentor_lenses(), "JSON 格式无效")
+
+    try:
+        payload = _require_mapping(raw, "root")
+        _require_version(payload.get("version"))
+        mentor = _require_mapping(payload.get("mentor"), "mentor")
+        principles = [
+            _validate_mentor_principle(item)
+            for item in _require_list(mentor.get("principles"), "mentor.principles")
+        ]
+        modes = [_validate_mentor_mode(item) for item in _require_list(mentor.get("modes"), "mentor.modes")]
+        prompts = [
+            _validate_mentor_prompt(item)
+            for item in _require_list(mentor.get("risk_prompts"), "mentor.risk_prompts")
+        ]
+        mode_ids = [mode["id"] for mode in modes]
+        prompt_ids = [prompt["id"] for prompt in prompts]
+        if len(mode_ids) != len(set(mode_ids)) or len(prompt_ids) != len(set(prompt_ids)):
+            raise StateValidationError("mentor.ids")
+        return {
+            "version": 1,
+            "mentor": {
+                "id": _require_string(mentor.get("id"), "mentor.id"),
+                "name": _require_string(mentor.get("name"), "mentor.name"),
+                "profile_url": _require_xueqiu_url(mentor.get("profile_url"), "mentor.profile_url"),
+                "summary": _require_string(mentor.get("summary"), "mentor.summary"),
+                "updated_at": _require_string(mentor.get("updated_at"), "mentor.updated_at"),
+                "notice": _require_string(mentor.get("notice"), "mentor.notice"),
+                "principles": principles,
+                "modes": modes,
+                "risk_prompts": prompts,
+            },
+            "error": None,
+        }
+    except (TypeError, ValueError):
+        return _repair(default_mentor_lenses(), "字段格式无效")

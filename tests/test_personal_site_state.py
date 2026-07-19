@@ -15,7 +15,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from init_state import init_state  # noqa: E402
-from personal_site_state import load_discipline_feed, load_trading_modes  # noqa: E402
+from personal_site_state import load_discipline_feed, load_mentor_lenses, load_trading_modes  # noqa: E402
 
 
 NOW = datetime(2026, 7, 11, 12, 0, tzinfo=timezone.utc)
@@ -102,6 +102,48 @@ def message(
     }
     row.update(overrides)
     return row
+
+
+def valid_mentor_payload() -> dict[str, object]:
+    return {
+        "version": 1,
+        "mentor": {
+            "id": "bingbing-xiaomei",
+            "name": "冰冰小美",
+            "profile_url": "https://xueqiu.com/u/7143769715",
+            "summary": "风险优先的宏观产业交易视角。",
+            "updated_at": "2026-07-19",
+            "notice": "基于公开表达整理，非本人授权或收益背书。",
+            "principles": [
+                {
+                    "name": "风险先于机会",
+                    "summary": "先判断环境，再决定仓位。",
+                    "source_url": "https://xueqiu.com/7143769715/319174752",
+                }
+            ],
+            "modes": [
+                {
+                    "id": "macro-risk-gate",
+                    "name": "宏观风险闸门",
+                    "horizon": "portfolio",
+                    "evidence": "behavior",
+                    "environment": ["海外与流动性风险升高"],
+                    "signals": ["汇率、利率、融资余额"],
+                    "actions": ["降低总仓位"],
+                    "exit_conditions": ["风险停止扩散"],
+                    "anti_patterns": ["用个股利好覆盖系统风险"],
+                    "source_urls": ["https://xueqiu.com/7143769715/396191476"],
+                }
+            ],
+            "risk_prompts": [
+                {
+                    "id": "risk-first",
+                    "text": "驱动没有修复，反弹也可能只是情绪回摆。先把仓位放到能承受判断错误的位置。",
+                    "source_url": "https://xueqiu.com/7143769715/319174752",
+                }
+            ],
+        },
+    }
 
 
 def load_modes_payload(
@@ -611,6 +653,37 @@ class DisciplineStateTest(unittest.TestCase):
         self.assertIsInstance(result["error"], str)
         self.assertIn("状态数据待修复", result["error"])
         self.assertEqual(result["messages"], [])
+
+
+class MentorLensStateTest(unittest.TestCase):
+    def test_valid_mentor_lens_preserves_modes_and_prompts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "mentor_lenses.json"
+            path.write_text(json.dumps(valid_mentor_payload(), ensure_ascii=False), encoding="utf-8")
+            result = load_mentor_lenses(path)
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["mentor"]["id"], "bingbing-xiaomei")
+        self.assertEqual(result["mentor"]["modes"][0]["horizon"], "portfolio")
+        self.assertEqual(result["mentor"]["risk_prompts"][0]["id"], "risk-first")
+
+    def test_mentor_lens_rejects_non_xueqiu_sources(self) -> None:
+        payload = valid_mentor_payload()
+        payload["mentor"]["modes"][0]["source_urls"] = ["https://example.com/not-primary"]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "mentor_lenses.json"
+            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            result = load_mentor_lenses(path)
+
+        self.assertIn("状态数据待修复", result["error"])
+        self.assertEqual(result["mentor"]["modes"], [])
+
+    def test_missing_mentor_lens_returns_empty_state_without_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = load_mentor_lenses(Path(tmp) / "missing.json")
+
+        self.assertIsNone(result["error"])
+        self.assertEqual(result["mentor"]["modes"], [])
 
 
 class StateInitializationTest(unittest.TestCase):

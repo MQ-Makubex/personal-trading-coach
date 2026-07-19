@@ -23,6 +23,7 @@ local_state/**
 *.json
 !templates/state/trading_modes.json
 !templates/state/discipline_feed.json
+!templates/state/mentor_lenses.json
 *.html
 *.md.html
 

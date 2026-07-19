@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "mentor": {
+    "id": "mentor-id",
+    "name": "导师名称",
+    "profile_url": "https://xueqiu.com/u/7143769715",
+    "summary": "基于公开资料整理的交易视角。",
+    "updated_at": "2026-07-19",
+    "notice": "仅用于研究和训练；与个人交易模式分开，不构成收益承诺。",
+    "principles": [],
+    "modes": [],
+    "risk_prompts": []
+  }
+}

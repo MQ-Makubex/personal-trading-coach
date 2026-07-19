@@ -22,6 +22,7 @@ STATE_FILES = [
     "decision_events.md",
     "trading_modes.json",
     "discipline_feed.json",
+    "mentor_lenses.json",
 ]
 
 
