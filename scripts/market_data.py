@@ -9,7 +9,7 @@ import math
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 
@@ -135,6 +135,78 @@ def eastmoney_secid(code: str) -> str:
     return f"{market}.{symbol}"
 
 
+def yahoo_symbol(code: str) -> str:
+    symbol = normalize_stock_code(code)
+    suffix = "SS" if symbol.startswith(("5", "6", "9")) else "SZ"
+    return f"{symbol}.{suffix}"
+
+
+def fetch_daily_bars_yahoo(code: str, start_date: str, end_date: str, adjust: str) -> DailySeries:
+    """Use Yahoo Chart as a final public fallback for A-share daily bars."""
+    start = datetime.strptime(normalize_date(start_date), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    end = datetime.strptime(normalize_date(end_date), "%Y-%m-%d").replace(tzinfo=timezone.utc) + timedelta(days=1)
+    symbol = yahoo_symbol(code)
+    params = {
+        "period1": str(int(start.timestamp())),
+        "period2": str(int(end.timestamp())),
+        "interval": "1d",
+        "events": "history",
+        "includeAdjustedClose": "true",
+    }
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?" + urllib.parse.urlencode(params)
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 personal-trading-coach/0.1",
+            "Accept": "application/json,text/plain,*/*",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=12) as response:
+        payload = json.loads(response.read(4 * 1024 * 1024).decode("utf-8", errors="replace"))
+    chart = (payload or {}).get("chart") or {}
+    if chart.get("error"):
+        raise RuntimeError(f"yahoo: {chart['error']}")
+    results = chart.get("result") or []
+    if not results:
+        raise RuntimeError("yahoo: empty daily series")
+    result = results[0]
+    timestamps = result.get("timestamp") or []
+    indicators = result.get("indicators") or {}
+    quotes = indicators.get("quote") or []
+    quote = quotes[0] if quotes else {}
+    adjusted_sets = indicators.get("adjclose") or []
+    adjusted = adjusted_sets[0].get("adjclose", []) if adjusted_sets else []
+    raw_closes = quote.get("close") or []
+    bars: list[DailyBar] = []
+    for index, timestamp in enumerate(timestamps):
+        raw_close = raw_closes[index] if index < len(raw_closes) else None
+        adjusted_close = adjusted[index] if index < len(adjusted) else None
+        close = adjusted_close if adjust != "none" and adjusted_close is not None else raw_close
+        if close is None:
+            continue
+        bars.append(
+            DailyBar(
+                trade_date=datetime.fromtimestamp(timestamp, timezone.utc).date().isoformat(),
+                open=to_float((quote.get("open") or [])[index]) if index < len(quote.get("open") or []) else None,
+                high=to_float((quote.get("high") or [])[index]) if index < len(quote.get("high") or []) else None,
+                low=to_float((quote.get("low") or [])[index]) if index < len(quote.get("low") or []) else None,
+                close=to_float(close),
+                volume=to_float((quote.get("volume") or [])[index]) if index < len(quote.get("volume") or []) else None,
+                amount=None,
+            )
+        )
+    if not bars:
+        raise RuntimeError("yahoo: empty daily series")
+    bars.sort(key=lambda item: item.trade_date)
+    return DailySeries(
+        code=normalize_stock_code(code),
+        provider="yahoo_chart",
+        bars=bars,
+        source="query1.finance.yahoo.com/v8/finance/chart",
+        notes=["Yahoo Chart 为 AKShare、BaoStock 与东方财富失败后的公开日线兜底。"],
+    )
+
+
 def fetch_daily_bars_eastmoney(code: str, start_date: str, end_date: str, adjust: str) -> DailySeries:
     """Use Eastmoney's public kline endpoint when optional Python adapters are unavailable."""
     params = {
@@ -242,7 +314,7 @@ def fetch_daily_bars(
     provider: str = "auto",
     adjust: str = "qfq",
 ) -> DailySeries:
-    providers = ["akshare", "baostock", "eastmoney"] if provider == "auto" else [provider]
+    providers = ["akshare", "baostock", "eastmoney", "yahoo"] if provider == "auto" else [provider]
     errors: list[str] = []
     for item in providers:
         try:
@@ -252,6 +324,8 @@ def fetch_daily_bars(
                 series = fetch_daily_bars_baostock(code, start_date, end_date, adjust)
             elif item == "eastmoney":
                 series = fetch_daily_bars_eastmoney(code, start_date, end_date, adjust)
+            elif item == "yahoo":
+                series = fetch_daily_bars_yahoo(code, start_date, end_date, adjust)
             else:
                 raise ValueError(f"unknown provider: {item}")
             if series.bars:

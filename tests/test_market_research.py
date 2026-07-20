@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -17,9 +18,59 @@ if str(SCRIPTS) not in sys.path:
 from market_data import DailyBar, DailySeries, summarize_daily_series  # noqa: E402
 from research_pool_builder import build_pool  # noqa: E402
 import daily_prepare  # noqa: E402
+import market_data  # noqa: E402
+
+
+class FakeHttpResponse:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.payload = payload
+
+    def __enter__(self) -> "FakeHttpResponse":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def read(self, _limit: int) -> bytes:
+        return json.dumps(self.payload).encode("utf-8")
 
 
 class MarketDataSummaryTests(unittest.TestCase):
+    def test_yahoo_fallback_parses_adjusted_a_share_daily_bars(self) -> None:
+        fetcher = getattr(market_data, "fetch_daily_bars_yahoo", None)
+        self.assertIsNotNone(fetcher)
+        payload = {
+            "chart": {
+                "error": None,
+                "result": [
+                    {
+                        "timestamp": [1784241000, 1784327400],
+                        "indicators": {
+                            "quote": [
+                                {
+                                    "open": [10.0, 10.5],
+                                    "high": [10.8, 11.3],
+                                    "low": [9.8, 10.4],
+                                    "close": [10.6, 11.1],
+                                    "volume": [1000, 1200],
+                                }
+                            ],
+                            "adjclose": [{"adjclose": [10.4, 10.9]}],
+                        },
+                    }
+                ],
+            }
+        }
+        with patch("market_data.urllib.request.urlopen", return_value=FakeHttpResponse(payload)) as urlopen:
+            series = fetcher("000001", "2026-07-16", "2026-07-17", "qfq")
+
+        requested = urlopen.call_args[0][0]
+        requested_url = requested.full_url if hasattr(requested, "full_url") else str(requested)
+        self.assertIn("000001.SZ", requested_url)
+        self.assertEqual(series.provider, "yahoo_chart")
+        self.assertEqual([bar.close for bar in series.bars], [10.4, 10.9])
+        self.assertEqual(series.bars[-1].volume, 1200.0)
+
     def test_summary_contains_facts_without_automated_scores_or_judgments(self) -> None:
         series = DailySeries(
             code="000001",
