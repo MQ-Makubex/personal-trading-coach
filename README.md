@@ -1,5 +1,19 @@
 # Personal Trading Coach
 
+## Private Cloudflare deployment
+
+The generated personal site remains ignored by Git. To publish the latest local
+build to the existing password-protected Cloudflare Pages project, run:
+
+```bash
+sh scripts/deploy_personal_site.sh
+```
+
+The script copies `reports/personal_site/` to a temporary bundle, rejects raw
+PDF/CSV/Excel/database files, adds the server-side authentication Worker, and
+deploys the bundle. `SITE_PASSWORD` and `SESSION_SECRET` remain Cloudflare Pages
+secrets and are never written into the repository or deployment assets.
+
 中文股票交易教练本地工作台。它帮助用户把交割单、交易想法、市场判断和阅读材料整理成可复盘、可验证、可沉淀的交易训练记录。
 
 本项目的目标不是预测行情，也不是给出买卖建议，而是训练一套更稳定的个人交易流程：事实先行、计划先行、风险先行、复盘沉淀。
