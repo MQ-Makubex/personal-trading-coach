@@ -81,6 +81,21 @@ def write_watchlist_manifest(
         trade_date=trade_date,
     )
     output = Path(output_path)
+    if output.exists() and manifest["status"] == "pending_chrome_sync":
+        try:
+            previous = json.loads(output.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            previous = {}
+        current_codes = _normalise_codes(stock["stock_code"] for stock in manifest.get("stocks", []))
+        previous_codes = _normalise_codes(previous.get("verified_codes", []))
+        if (
+            previous.get("status") == "synced"
+            and sorted(current_codes) == sorted(previous_codes)
+            and len(previous_codes) == EXPECTED_POOL_SIZE
+        ):
+            manifest["status"] = "synced"
+            manifest["synced_at"] = previous.get("synced_at")
+            manifest["verified_codes"] = previous_codes
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return manifest

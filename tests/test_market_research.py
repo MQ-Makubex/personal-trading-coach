@@ -36,6 +36,34 @@ class FakeHttpResponse:
 
 
 class MarketDataSummaryTests(unittest.TestCase):
+    def test_tencent_fallback_parses_qfq_a_share_daily_bars(self) -> None:
+        fetcher = getattr(market_data, "fetch_daily_bars_tencent", None)
+        self.assertIsNotNone(fetcher)
+        payload = {
+            "code": 0,
+            "msg": "",
+            "data": {
+                "sz002475": {
+                    "qfqday": [
+                        ["2026-07-22", "59.880", "59.160", "61.680", "58.800", "1062223.000"],
+                        ["2026-07-23", "59.160", "61.190", "61.980", "58.650", "1209696.000"],
+                    ]
+                }
+            },
+        }
+        with patch("market_data.urllib.request.urlopen", return_value=FakeHttpResponse(payload)) as urlopen:
+            series = fetcher("002475", "2026-07-01", "2026-07-23", "qfq")
+
+        requested = urlopen.call_args[0][0]
+        requested_url = requested.full_url if hasattr(requested, "full_url") else str(requested)
+        self.assertIn("sz002475%2Cday", requested_url)
+        self.assertIn("%2Cqfq", requested_url)
+        self.assertEqual(series.provider, "tencent_qfq")
+        self.assertEqual(series.source, "web.ifzq.gtimg.cn/appstock/app/fqkline/get")
+        self.assertEqual(series.bars[-1].trade_date, "2026-07-23")
+        self.assertEqual(series.bars[-1].close, 61.19)
+        self.assertEqual(series.bars[-1].volume, 1209696.0)
+
     def test_yahoo_fallback_parses_adjusted_a_share_daily_bars(self) -> None:
         fetcher = getattr(market_data, "fetch_daily_bars_yahoo", None)
         self.assertIsNotNone(fetcher)

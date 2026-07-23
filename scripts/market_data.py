@@ -141,6 +141,73 @@ def yahoo_symbol(code: str) -> str:
     return f"{symbol}.{suffix}"
 
 
+def tencent_symbol(code: str) -> str:
+    symbol = normalize_stock_code(code)
+    prefix = "sh" if symbol.startswith(("5", "6", "9")) else "sz"
+    return f"{prefix}{symbol}"
+
+
+def fetch_daily_bars_tencent(code: str, start_date: str, end_date: str, adjust: str) -> DailySeries:
+    """Use Tencent's public K-line endpoint as a qfq-capable fallback."""
+    symbol = tencent_symbol(code)
+    fq = "none" if adjust == "none" else adjust
+    params = {
+        "param": ",".join(
+            [
+                symbol,
+                "day",
+                normalize_date(start_date),
+                normalize_date(end_date),
+                "320",
+                fq,
+            ]
+        )
+    }
+    url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?" + urllib.parse.urlencode(params)
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 personal-trading-coach/0.1",
+            "Accept": "application/json,text/plain,*/*",
+            "Referer": "https://gu.qq.com/",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=12) as response:
+        payload = json.loads(response.read(4 * 1024 * 1024).decode("utf-8", errors="replace"))
+    if (payload or {}).get("code") not in (0, "0"):
+        raise RuntimeError(f"tencent: {(payload or {}).get('msg') or 'request failed'}")
+    data = ((payload or {}).get("data") or {}).get(symbol) or {}
+    series_key = f"{fq}day" if fq != "none" else "day"
+    rows = data.get(series_key) or data.get("day") or []
+    if not rows:
+        raise RuntimeError("tencent: empty daily series")
+    bars: list[DailyBar] = []
+    for row in rows:
+        if not isinstance(row, list) or len(row) < 6:
+            continue
+        bars.append(
+            DailyBar(
+                trade_date=normalize_date(row[0]),
+                open=to_float(row[1]),
+                close=to_float(row[2]),
+                high=to_float(row[3]),
+                low=to_float(row[4]),
+                volume=to_float(row[5]),
+                amount=None,
+            )
+        )
+    if not bars:
+        raise RuntimeError("tencent: empty daily series")
+    bars.sort(key=lambda item: item.trade_date)
+    return DailySeries(
+        code=normalize_stock_code(code),
+        provider="tencent_qfq" if fq == "qfq" else f"tencent_{fq}",
+        bars=bars,
+        source="web.ifzq.gtimg.cn/appstock/app/fqkline/get",
+        notes=["腾讯公开日线为 AKShare、BaoStock 与东方财富失败后的前复权兜底。"],
+    )
+
+
 def fetch_daily_bars_yahoo(code: str, start_date: str, end_date: str, adjust: str) -> DailySeries:
     """Use Yahoo Chart as a final public fallback for A-share daily bars."""
     start = datetime.strptime(normalize_date(start_date), "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -314,7 +381,7 @@ def fetch_daily_bars(
     provider: str = "auto",
     adjust: str = "qfq",
 ) -> DailySeries:
-    providers = ["akshare", "baostock", "eastmoney", "yahoo"] if provider == "auto" else [provider]
+    providers = ["akshare", "baostock", "eastmoney", "tencent", "yahoo"] if provider == "auto" else [provider]
     errors: list[str] = []
     for item in providers:
         try:
@@ -324,6 +391,8 @@ def fetch_daily_bars(
                 series = fetch_daily_bars_baostock(code, start_date, end_date, adjust)
             elif item == "eastmoney":
                 series = fetch_daily_bars_eastmoney(code, start_date, end_date, adjust)
+            elif item == "tencent":
+                series = fetch_daily_bars_tencent(code, start_date, end_date, adjust)
             elif item == "yahoo":
                 series = fetch_daily_bars_yahoo(code, start_date, end_date, adjust)
             else:

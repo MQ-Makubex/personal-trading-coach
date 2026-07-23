@@ -9,7 +9,7 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-from xueqiu_watchlist_sync import build_watchlist_manifest, mark_manifest_synced  # noqa: E402
+from xueqiu_watchlist_sync import build_watchlist_manifest, mark_manifest_synced, write_watchlist_manifest  # noqa: E402
 
 
 def pool_markdown(codes):
@@ -52,6 +52,20 @@ class XueqiuWatchlistSyncTests(unittest.TestCase):
             synced = mark_manifest_synced(manifest_path, reversed(codes))
         self.assertEqual(synced["status"], "synced")
         self.assertEqual(sorted(synced["verified_codes"]), sorted(codes))
+
+    def test_rebuilding_same_pool_preserves_synced_status(self):
+        codes = ["301396", "603259", "300347", "300760", "600276", "600036", "600919", "002409", "300236", "300346", "300655", "002156", "002185", "300394", "000977"]
+        with tempfile.TemporaryDirectory() as tmp:
+            pool_path = Path(tmp) / "research_pool.md"
+            manifest_path = Path(tmp) / "xueqiu_watchlist_sync.json"
+            pool_path.write_text(pool_markdown(codes), encoding="utf-8")
+            write_watchlist_manifest(pool_path, manifest_path, run_id="run-test", trade_date="2026-07-13")
+            synced = mark_manifest_synced(manifest_path, reversed(codes))
+            rebuilt = write_watchlist_manifest(pool_path, manifest_path, run_id="run-test", trade_date="2026-07-13")
+
+        self.assertEqual(rebuilt["status"], "synced")
+        self.assertEqual(rebuilt["synced_at"], synced["synced_at"])
+        self.assertEqual(sorted(rebuilt["verified_codes"]), sorted(codes))
 
 
 if __name__ == "__main__":

@@ -302,6 +302,17 @@ class WorkbenchArtifactTest(unittest.TestCase):
 
         self.assertEqual([row["stock_code"] for row in rows], ["300001"])
 
+    def test_research_pool_parser_accepts_basket_as_theme_column(self) -> None:
+        markdown = (
+            "| 股票 | 篮子 | 均线事实 | 观察触发 |\n"
+            "| --- | --- | --- | --- |\n"
+            "| 600406 国电南瑞 | 电网自动化 | 收24.37；MA200=24.29 | 守住MA200 |\n"
+        )
+
+        rows = site.extract_research_pool_candidates(markdown)
+
+        self.assertEqual(rows[0]["theme"], "电网自动化")
+
     def test_research_pool_parser_stops_at_a_non_table_boundary(self) -> None:
         markdown = (
             "| 代码 | 名称 | 题材 | 买点 |\n"
