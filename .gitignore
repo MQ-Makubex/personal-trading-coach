@@ -32,6 +32,7 @@ __pycache__/
 *.py[cod]
 .DS_Store
 .superpowers/
+.wrangler/
 
 # Keep private directory placeholders
 !state/.gitkeep
