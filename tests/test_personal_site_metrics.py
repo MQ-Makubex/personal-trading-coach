@@ -218,6 +218,46 @@ class PeriodSummaryTest(unittest.TestCase):
             ],
         )
 
+    def test_account_cash_row_is_excluded_from_security_realized_and_stock_ranking(self) -> None:
+        adjustments = [
+            {"trade_date": "2026-07-03", "stock_code": "", "stock_name": "账户利息", "net_amount": 1.25},
+        ]
+        window = DateWindow("month", "2026-07", date(2026, 7, 1), date(2026, 7, 31), "2026-07")
+
+        summary = summarize_period([], [], adjustments, window)
+        stocks = period_stock_results([], adjustments, window)
+
+        self.assertEqual(summary["realized_pnl"], 0.0)
+        self.assertEqual(stocks, [])
+
+    def test_cycle_cash_adjustment_is_not_counted_twice_in_period_totals(self) -> None:
+        cycles = [
+            {
+                "status": "closed",
+                "close_date": "2026-07-30",
+                "stock_code": "000001",
+                "stock_name": "TEST",
+                "trade_realized_pnl_after_fees": -200,
+                "cash_adjustment_amount": 15,
+                "realized_pnl_after_fees": -185,
+                "holding_days": 14,
+            }
+        ]
+        adjustments = [
+            {"trade_date": "2026-07-17", "stock_code": "000001", "stock_name": "TEST", "net_amount": 20},
+            {"trade_date": "2026-07-23", "stock_code": "000001", "stock_name": "TEST", "net_amount": -2},
+            {"trade_date": "2026-07-31", "stock_code": "000001", "stock_name": "TEST", "net_amount": -3},
+        ]
+        window = DateWindow("month", "2026-07", date(2026, 7, 1), date(2026, 7, 31), "2026-07")
+
+        summary = summarize_period(cycles, [], adjustments, window)
+        stocks = period_stock_results(cycles, adjustments, window)
+
+        self.assertEqual(summary["realized_pnl"], -185)
+        self.assertEqual(stocks[0]["cycle_pnl"], -200)
+        self.assertEqual(stocks[0]["cash_adjustments"], 15)
+        self.assertEqual(stocks[0]["total_pnl"], -185)
+
 
 if __name__ == "__main__":
     unittest.main()

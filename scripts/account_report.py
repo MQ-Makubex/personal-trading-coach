@@ -99,6 +99,7 @@ def collect(conn: sqlite3.Connection, limit: int) -> dict[str, Any]:
                 count(*) as cash_adjustment_rows,
                 round(sum(coalesce(net_amount,0)), 2) as cash_adjustment_amount
               from cash_adjustments
+              where stock_code glob '[0-9][0-9][0-9][0-9][0-9][0-9]'
               group by stock_code
             ),
             all_codes as (

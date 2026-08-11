@@ -161,8 +161,16 @@ def summarize_period(
     event_trades = [row for row in trades if window.contains(str(_value(row, "trade_date", "")))]
     event_adjustments = [row for row in adjustments if window.contains(str(_value(row, "trade_date", "")))]
     ability = summarize_cycles(closed)
-    cycle_pnl = sum(float(row.get("realized_pnl_after_fees") or 0) for row in closed)
-    adjustment_pnl = sum(float(_value(row, "net_amount", 0) or 0) for row in event_adjustments)
+    cycle_pnl = sum(
+        float(row.get("trade_realized_pnl_after_fees", row.get("realized_pnl_after_fees")) or 0)
+        for row in closed
+    )
+    stock_adjustments = [
+        row
+        for row in event_adjustments
+        if re.fullmatch(r"\d{6}", str(_value(row, "stock_code", "")))
+    ]
+    adjustment_pnl = sum(float(_value(row, "net_amount", 0) or 0) for row in stock_adjustments)
     codes = {
         str(_value(row, "stock_code", ""))
         for row in event_trades
@@ -205,10 +213,14 @@ def period_stock_results(
         if cycle.get("status") != "closed" or not window.contains(str(cycle.get("close_date") or "")):
             continue
         item = ensure(str(cycle.get("stock_code") or ""), str(cycle.get("stock_name") or ""))
-        item["cycle_pnl"] += float(cycle.get("realized_pnl_after_fees") or 0)
+        item["cycle_pnl"] += float(
+            cycle.get("trade_realized_pnl_after_fees", cycle.get("realized_pnl_after_fees")) or 0
+        )
         item["closed_cycles"] += 1
     for adjustment in adjustments:
         if not window.contains(str(_value(adjustment, "trade_date", ""))):
+            continue
+        if not re.fullmatch(r"\d{6}", str(_value(adjustment, "stock_code", ""))):
             continue
         item = ensure(
             str(_value(adjustment, "stock_code", "")),

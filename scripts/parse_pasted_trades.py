@@ -46,6 +46,20 @@ ALIASES = {
 REQUIRED_FIELDS = ["stock_code", "stock_name", "side", "quantity", "price"]
 
 
+def non_trade_event_kind(category: str) -> str:
+    if any(token in category for token in ("配售缴款", "配债缴款", "中签缴款")):
+        return "asset_acquisition"
+    if "红利" in category or "扣税" in category:
+        return "security_cash_adjustment"
+    if "利息" in category:
+        return "account_interest"
+    if "银行转证券" in category or "证券转银行" in category:
+        return "account_transfer"
+    if "融券回购" in category or "融券购回" in category:
+        return "cash_management"
+    return "other"
+
+
 def normalize_text(value: object) -> str:
     return re.sub(r"[\s_\-:：/()（）]+", "", str(value or "").strip().lower())
 
@@ -139,6 +153,7 @@ def parse_text(text: str, default_trade_date: str) -> tuple[list[dict[str, str]]
     header_index, headers = find_header(lines)
     mapping = build_mapping(headers)
     rows: list[dict[str, str]] = []
+    non_trade_events: list[dict[str, str]] = []
 
     for source_line, line in enumerate(lines[header_index + 1 :], start=header_index + 2):
         cells = split_line(line)
@@ -146,13 +161,30 @@ def parse_text(text: str, default_trade_date: str) -> tuple[list[dict[str, str]]
             cells = cells + [""] * (len(headers) - len(cells))
 
         stock_code = get_cell(cells, mapping, "stock_code")
-        side = normalize_side(get_cell(cells, mapping, "side"))
+        category = get_cell(cells, mapping, "side")
+        side = normalize_side(category)
         quantity = clean_number(get_cell(cells, mapping, "quantity"))
         price = clean_number(get_cell(cells, mapping, "price"))
 
-        if not re.fullmatch(r"\d{6}", stock_code or ""):
-            continue
         if side not in {"BUY", "SELL"}:
+            net_amount = clean_number(get_cell(cells, mapping, "net_amount"))
+            if category and net_amount:
+                non_trade_events.append(
+                    {
+                        "trade_date": get_cell(cells, mapping, "trade_date") or default_trade_date,
+                        "trade_time": get_cell(cells, mapping, "trade_time"),
+                        "stock_code": stock_code,
+                        "stock_name": get_cell(cells, mapping, "stock_name"),
+                        "category": category,
+                        "event_kind": non_trade_event_kind(category),
+                        "quantity": quantity,
+                        "price": price,
+                        "amount": clean_number(get_cell(cells, mapping, "amount")),
+                        "net_amount": net_amount,
+                    }
+                )
+            continue
+        if not re.fullmatch(r"\d{6}", stock_code or ""):
             continue
         if not quantity or not price:
             continue
@@ -185,9 +217,23 @@ def parse_text(text: str, default_trade_date: str) -> tuple[list[dict[str, str]]
 
     if not rows:
         raise ValueError("没有解析到有效成交记录。")
+    position_affecting_events = [
+        event for event in non_trade_events if event["event_kind"] == "asset_acquisition"
+    ]
+    account_level_events = [
+        event
+        for event in non_trade_events
+        if event["event_kind"] in {"account_interest", "account_transfer", "cash_management"}
+    ]
     report = {
         "status": "ok",
         "row_count": len(rows),
+        "non_trade_event_count": len(non_trade_events),
+        "position_affecting_event_count": len(position_affecting_events),
+        "account_level_event_count": len(account_level_events),
+        "requires_asset_reconciliation": bool(position_affecting_events),
+        "requires_account_reconciliation": bool(account_level_events),
+        "non_trade_events": non_trade_events,
         "source_headers": headers,
         "mapped_fields": mapping,
         "output_fields": OUTPUT_FIELDS,

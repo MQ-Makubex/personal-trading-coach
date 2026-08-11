@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import sys
 import unittest
 from pathlib import Path
@@ -18,6 +19,7 @@ from ledger_analytics import (  # noqa: E402
     broker_like_realized_by_stock,
     broker_like_realized_lots,
     cycle_id_for_trade,
+    load_cash_adjustments,
     rolling_cost_positions,
 )
 
@@ -144,6 +146,35 @@ class RollingCostPositionsTest(unittest.TestCase):
         self.assertEqual(by_stock[0]["cash_adjustment_amount"], 160)
         self.assertEqual(by_stock[0]["broker_like_total_pnl_after_fees"], 60)
 
+    def test_account_cash_rows_are_not_loaded_as_security_adjustments(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            """
+            create table cash_adjustments (
+              trade_date text,
+              trade_time text,
+              stock_code text,
+              stock_name text,
+              category text,
+              net_amount real
+            )
+            """
+        )
+        conn.executemany(
+            "insert into cash_adjustments values (?, ?, ?, ?, ?, ?)",
+            [
+                ("2026-06-22", "", "", "账户利息", "利息归本", 1.25),
+                ("2026-06-23", "", "000001", "TEST", "红利入账", 20.0),
+            ],
+        )
+
+        adjustments = load_cash_adjustments(conn)
+        by_stock = broker_like_realized_by_stock([], {"000001": "TEST"}, adjustments)
+
+        self.assertEqual(len(adjustments), 1)
+        self.assertEqual([row["stock_code"] for row in by_stock], ["000001"])
+
 
 class BrokerLikeCyclesTest(unittest.TestCase):
     def test_zero_quantity_buy_does_not_defer_same_day_close(self) -> None:
@@ -222,6 +253,9 @@ class BrokerLikeCyclesTest(unittest.TestCase):
             "buy_cost_after_fees",
             "sell_proceeds_after_fees",
             "rolling_cost_basis_after_fees",
+            "trade_realized_pnl_after_fees",
+            "cash_adjustment_amount",
+            "cash_adjustment_rows",
             "realized_pnl_after_fees",
             "return_pct",
             "position_quantity_before_close",
@@ -297,6 +331,9 @@ class BrokerLikeCyclesTest(unittest.TestCase):
             "broker_like_average_cost_before_sell",
             "broker_like_cost_basis_before_sell",
             "sell_proceeds_after_fees",
+            "broker_like_trade_realized_pnl_after_fees",
+            "cash_adjustment_amount",
+            "cash_adjustment_rows",
             "broker_like_realized_pnl_after_fees",
             "is_position_close",
             "cycle_id",
@@ -313,6 +350,24 @@ class BrokerLikeCyclesTest(unittest.TestCase):
         )
         for row in rows:
             self.assertEqual(set(row), expected_keys)
+
+    def test_closed_cycle_includes_dividend_and_later_dividend_taxes(self) -> None:
+        trades = [
+            trade(1, "2026-07-16", "09:30:00", "BUY", 100, 1000, net_amount=-1000),
+            trade(2, "2026-07-30", "14:54:00", "SELL", 100, 800, net_amount=800),
+        ]
+        adjustments = [
+            CashAdjustment(1, "2026-07-17", "", "000001", "TEST", "红利入账", 20),
+            CashAdjustment(2, "2026-07-23", "", "000001", "TEST", "股息红利差异扣税", -2),
+            CashAdjustment(3, "2026-07-31", "", "000001", "TEST", "股息红利差异扣税", -3),
+        ]
+
+        cycle = broker_like_cycles(trades, {"000001": "TEST"}, adjustments)[0]
+
+        self.assertEqual(cycle["trade_realized_pnl_after_fees"], -200)
+        self.assertEqual(cycle["cash_adjustment_amount"], 15)
+        self.assertEqual(cycle["cash_adjustment_rows"], 3)
+        self.assertEqual(cycle["realized_pnl_after_fees"], -185)
 
     def test_same_day_flat_and_reentry_stays_in_one_cycle(self) -> None:
         trades = [

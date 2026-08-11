@@ -91,14 +91,15 @@
     const cycles = dataset.cycles.filter(row => row.status === 'closed' && inRange(row.close_date, window));
     const trades = dataset.trades.filter(row => inRange(row.trade_date, window));
     const adjustments = dataset.adjustments.filter(row => inRange(row.trade_date, window));
+    const stockAdjustments = adjustments.filter(row => /^\d{6}$/.test(String(row.stock_code || '')));
     const wins = cycles.filter(row => Number(row.realized_pnl_after_fees) > 0);
     const losses = cycles.filter(row => Number(row.realized_pnl_after_fees) < 0);
     const grossWins = wins.reduce((sum, row) => sum + Number(row.realized_pnl_after_fees), 0);
     const grossLosses = Math.abs(losses.reduce((sum, row) => sum + Number(row.realized_pnl_after_fees), 0));
     return {
       realized_pnl: round2(
-        cycles.reduce((sum, row) => sum + Number(row.realized_pnl_after_fees || 0), 0)
-          + adjustments.reduce((sum, row) => sum + Number(row.net_amount || 0), 0)
+        cycles.reduce((sum, row) => sum + Number(row.trade_realized_pnl_after_fees ?? row.realized_pnl_after_fees ?? 0), 0)
+          + stockAdjustments.reduce((sum, row) => sum + Number(row.net_amount || 0), 0)
       ),
       closed_cycles: cycles.length,
       win_rate: cycles.length ? round2(wins.length / cycles.length * 100) : null,
@@ -127,10 +128,11 @@
     };
     dataset.cycles.filter(row => row.status === 'closed' && inRange(row.close_date, window)).forEach(row => {
       const item = ensure(row.stock_code, row.stock_name);
-      item.cycle_pnl += Number(row.realized_pnl_after_fees || 0);
+      item.cycle_pnl += Number(row.trade_realized_pnl_after_fees ?? row.realized_pnl_after_fees ?? 0);
       item.closed_cycles += 1;
     });
     dataset.adjustments.filter(row => inRange(row.trade_date, window)).forEach(row => {
+      if (!/^\d{6}$/.test(String(row.stock_code || ''))) return;
       ensure(row.stock_code, row.stock_name).cash_adjustments += Number(row.net_amount || 0);
     });
     return Array.from(rows.values())

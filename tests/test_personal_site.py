@@ -120,6 +120,77 @@ class MarkToMarketTests(unittest.TestCase):
         self.assertIsNone(result["total_pnl"])
         self.assertEqual(result["missing_quote_codes"], ["300260"])
 
+    def test_same_date_broker_total_is_displayed_without_mutating_computed_components(self) -> None:
+        mark = {
+            "complete": True,
+            "quote_date": "2026-08-11",
+            "realized_pnl": -200.0,
+            "unrealized_pnl": 50.0,
+            "total_pnl": -150.0,
+        }
+
+        result = site.apply_reported_account_total(
+            mark,
+            {
+                "as_of_date": "2026-08-11",
+                "reported_total_pnl": -145.0,
+                "reconciliation_status": "broker_scope_difference",
+                "reconciliation_note": "历史统计口径差异，不是本次漏单。",
+                "non_stock_positions": [
+                    {
+                        "security_code": "110000",
+                        "security_name": "测试转债",
+                        "quantity": 10,
+                        "cost_basis": 1000,
+                        "unrealized_pnl": 0.0,
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(result["realized_pnl"], -200.0)
+        self.assertEqual(result["stock_unrealized_pnl"], 50.0)
+        self.assertEqual(result["non_stock_unrealized_pnl"], 0.0)
+        self.assertEqual(result["unrealized_pnl"], 50.0)
+        self.assertEqual(result["computed_total_pnl"], -150.0)
+        self.assertEqual(result["total_pnl"], -145.0)
+        self.assertEqual(result["reconciliation_difference"], 5.0)
+        self.assertEqual(result["reconciliation_status"], "broker_scope_difference")
+        self.assertEqual(result["reconciliation_note"], "历史统计口径差异，不是本次漏单。")
+        self.assertEqual(result["total_pnl_source"], "broker_reported")
+
+        note = site.account_total_note(result)
+        self.assertIn("证券底账 -¥150.00", note)
+        self.assertIn("差额 ¥5.00 已确认属于历史统计口径", note)
+        self.assertNotIn("待核验", note)
+
+    def test_reconciled_securities_report_only_account_scope_as_unresolved(self) -> None:
+        note = site.account_total_note(
+            {
+                "total_pnl_source": "broker_reported",
+                "reported_total_pnl_date": "2026-08-11",
+                "computed_total_pnl": -150.0,
+                "reconciliation_difference": 5.0,
+                "reconciliation_status": "securities_reconciled_account_scope_unresolved",
+            }
+        )
+
+        self.assertIn("证券底账与持仓盯市已闭合", note)
+        self.assertIn("差额 ¥5.00", note)
+        self.assertIn("券商账户级统计项目待核验", note)
+        self.assertNotIn("漏单待核验", note)
+
+    def test_stale_broker_total_does_not_override_current_computation(self) -> None:
+        mark = {"complete": True, "quote_date": "2026-08-12", "total_pnl": -100.0}
+
+        result = site.apply_reported_account_total(
+            mark,
+            {"as_of_date": "2026-08-11", "reported_total_pnl": -145.0},
+        )
+
+        self.assertEqual(result["total_pnl"], -100.0)
+        self.assertEqual(result["total_pnl_source"], "computed")
+
 
 class TimelineIndexTests(unittest.TestCase):
     def test_stock_reference_label_caps_dense_code_lists(self) -> None:

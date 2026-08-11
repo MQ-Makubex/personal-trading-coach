@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import sqlite3
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -268,32 +269,46 @@ def import_files(
     existing_rows = load_existing(ledger_csv)
     existing_cash_adjustments = load_existing_cash_adjustments(cash_adjustment_ledger)
     stats.existing_rows = len(existing_rows)
-    rows_by_key = {row_key(row): row for row in existing_rows}
-    cash_adjustments_by_key = {cash_adjustment_row_key(row): row for row in existing_cash_adjustments}
+    merged_rows = list(existing_rows)
+    merged_cash_adjustments = list(existing_cash_adjustments)
+    row_counts = Counter(row_key(row) for row in existing_rows)
+    cash_adjustment_counts = Counter(cash_adjustment_row_key(row) for row in existing_cash_adjustments)
 
     for input_file in input_files:
         rows, headers = read_csv(input_file)
         validate_headers(input_file, headers)
+        source_counts = Counter(row_key(row) for row in rows)
+        additions_needed = {
+            key: max(0, count - row_counts[key])
+            for key, count in source_counts.items()
+        }
         for row in rows:
             stats.input_rows += 1
             key = row_key(row)
-            if key in rows_by_key:
+            if additions_needed[key] <= 0:
                 stats.duplicate_rows += 1
                 continue
-            rows_by_key[key] = row
+            merged_rows.append(row)
+            row_counts[key] += 1
+            additions_needed[key] -= 1
             stats.imported_rows += 1
 
     for input_file in cash_adjustment_files or []:
         rows, headers = read_cash_adjustment_csv(input_file)
         validate_cash_adjustment_headers(input_file, headers)
+        source_counts = Counter(cash_adjustment_row_key(row) for row in rows)
+        additions_needed = {
+            key: max(0, count - cash_adjustment_counts[key])
+            for key, count in source_counts.items()
+        }
         for row in rows:
             key = cash_adjustment_row_key(row)
-            if key in cash_adjustments_by_key:
+            if additions_needed[key] <= 0:
                 continue
-            cash_adjustments_by_key[key] = row
+            merged_cash_adjustments.append(row)
+            cash_adjustment_counts[key] += 1
+            additions_needed[key] -= 1
 
-    merged_rows = list(rows_by_key.values())
-    merged_cash_adjustments = list(cash_adjustments_by_key.values())
     write_ledger_csv(merged_rows, ledger_csv)
     write_cash_adjustments_csv(merged_cash_adjustments, cash_adjustment_ledger)
     write_sqlite(merged_rows, sqlite_path, merged_cash_adjustments)

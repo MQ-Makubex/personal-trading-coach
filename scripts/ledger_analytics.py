@@ -59,6 +59,10 @@ def money(value: float) -> float:
     return round(value, 2)
 
 
+def is_stock_code(value: str) -> bool:
+    return bool(re.fullmatch(r"\d{6}", str(value or "")))
+
+
 def buy_cost_after_fees(trade: Trade) -> float:
     if trade.net_amount < 0:
         return -trade.net_amount
@@ -173,7 +177,7 @@ def display_names_by_code(trades: list[Trade], cash_adjustments: list[CashAdjust
     for record in [*trades, *(cash_adjustments or [])]:
         code = record.stock_code
         name = record.stock_name
-        if not code:
+        if not is_stock_code(code):
             continue
         if name:
             fallback[code] = name[2:] if name.startswith("XD") else name
@@ -278,7 +282,56 @@ def _cycle_event(trade: Trade) -> dict[str, Any]:
     }
 
 
-def broker_like_cycles(trades: list[Trade], display_names: dict[str, str]) -> list[dict[str, Any]]:
+def _apply_cycle_cash_adjustments(
+    cycles: list[dict[str, Any]], cash_adjustments: list[CashAdjustment]
+) -> None:
+    cycles_by_code: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for cycle in cycles:
+        cycles_by_code[str(cycle["stock_code"])].append(cycle)
+    for rows in cycles_by_code.values():
+        rows.sort(key=lambda row: (str(row["first_buy_date"]), str(row["first_buy_time"])))
+
+    last_dividend_cycle: dict[str, dict[str, Any]] = {}
+    for adjustment in sorted(cash_adjustments, key=lambda row: (row.trade_date, row.trade_time, row.rowid)):
+        code = adjustment.stock_code
+        candidates = [
+            cycle
+            for cycle in cycles_by_code.get(code, [])
+            if str(cycle["first_buy_date"]) <= adjustment.trade_date
+        ]
+        if not candidates:
+            continue
+        if "扣税" in adjustment.category and code in last_dividend_cycle:
+            target = last_dividend_cycle[code]
+        else:
+            containing = [
+                cycle
+                for cycle in candidates
+                if cycle["status"] == "open" or adjustment.trade_date <= str(cycle["close_date"])
+            ]
+            target = (containing or candidates)[-1]
+        target["cash_adjustment_amount"] = money(
+            number(target.get("cash_adjustment_amount")) + adjustment.net_amount
+        )
+        target["cash_adjustment_rows"] = int(number(target.get("cash_adjustment_rows"))) + 1
+        if adjustment.net_amount > 0:
+            last_dividend_cycle[code] = target
+
+    for cycle in cycles:
+        if cycle["status"] != "closed":
+            continue
+        trade_pnl = number(cycle.get("trade_realized_pnl_after_fees"))
+        total_pnl = money(trade_pnl + number(cycle.get("cash_adjustment_amount")))
+        cycle["realized_pnl_after_fees"] = total_pnl
+        buy_cost = number(cycle.get("buy_cost_after_fees"))
+        cycle["return_pct"] = round(total_pnl / buy_cost * 100, 2) if buy_cost else None
+
+
+def broker_like_cycles(
+    trades: list[Trade],
+    display_names: dict[str, str],
+    cash_adjustments: list[CashAdjustment] | None = None,
+) -> list[dict[str, Any]]:
     ordered = sorted(trades, key=lambda row: (row.trade_date, row.trade_time, row.rowid))
     same_day_reentry_after_sell = future_same_day_buys(ordered)
     active: dict[str, dict[str, Any]] = {}
@@ -352,6 +405,9 @@ def broker_like_cycles(trades: list[Trade], display_names: dict[str, str]) -> li
                 "buy_cost_after_fees": money(state["buy_cost"]),
                 "sell_proceeds_after_fees": money(state["sell_proceeds"]),
                 "rolling_cost_basis_after_fees": 0.0,
+                "trade_realized_pnl_after_fees": money(realized),
+                "cash_adjustment_amount": 0.0,
+                "cash_adjustment_rows": 0,
                 "realized_pnl_after_fees": money(realized),
                 "return_pct": round(realized / state["buy_cost"] * 100, 2) if state["buy_cost"] else None,
                 "position_quantity_before_close": money(before_quantity),
@@ -385,6 +441,9 @@ def broker_like_cycles(trades: list[Trade], display_names: dict[str, str]) -> li
                 "buy_cost_after_fees": money(state["buy_cost"]),
                 "sell_proceeds_after_fees": money(state["sell_proceeds"]),
                 "rolling_cost_basis_after_fees": money(state["rolling_cost"]),
+                "trade_realized_pnl_after_fees": None,
+                "cash_adjustment_amount": 0.0,
+                "cash_adjustment_rows": 0,
                 "realized_pnl_after_fees": None,
                 "return_pct": None,
                 "position_quantity_before_close": None,
@@ -395,15 +454,21 @@ def broker_like_cycles(trades: list[Trade], display_names: dict[str, str]) -> li
                 "events": list(state["events"]),
             }
         )
-    return sorted(
+    cycles = sorted(
         [*completed, *open_cycles],
         key=lambda row: (row["first_buy_date"], row["first_buy_time"], row["stock_code"]),
     )
+    _apply_cycle_cash_adjustments(cycles, cash_adjustments or [])
+    return cycles
 
 
-def broker_like_realized_lots(trades: list[Trade], display_names: dict[str, str]) -> list[dict[str, Any]]:
+def broker_like_realized_lots(
+    trades: list[Trade],
+    display_names: dict[str, str],
+    cash_adjustments: list[CashAdjustment] | None = None,
+) -> list[dict[str, Any]]:
     rows = []
-    for cycle in broker_like_cycles(trades, display_names):
+    for cycle in broker_like_cycles(trades, display_names, cash_adjustments):
         if cycle["status"] != "closed":
             continue
         rows.append(
@@ -421,6 +486,9 @@ def broker_like_realized_lots(trades: list[Trade], display_names: dict[str, str]
                 "broker_like_average_cost_before_sell": cycle["close_average_cost_before_sell"],
                 "broker_like_cost_basis_before_sell": cycle["close_cost_basis_before_sell"],
                 "sell_proceeds_after_fees": cycle["close_sell_proceeds_after_fees"],
+                "broker_like_trade_realized_pnl_after_fees": cycle["trade_realized_pnl_after_fees"],
+                "cash_adjustment_amount": cycle["cash_adjustment_amount"],
+                "cash_adjustment_rows": cycle["cash_adjustment_rows"],
                 "broker_like_realized_pnl_after_fees": cycle["realized_pnl_after_fees"],
                 "is_position_close": True,
                 "cycle_id": cycle["cycle_id"],
@@ -512,18 +580,23 @@ def broker_like_realized_by_stock(
                 "cash_adjustment_rows": 0,
             },
         )
-        pnl = number(row["broker_like_realized_pnl_after_fees"])
+        trade_pnl = number(
+            row.get("broker_like_trade_realized_pnl_after_fees", row["broker_like_realized_pnl_after_fees"])
+        )
+        cycle_pnl = number(row["broker_like_realized_pnl_after_fees"])
         item["closed_quantity"] += number(row["cycle_sell_quantity"])
         item["broker_like_cost_basis_after_fees"] += number(row["broker_like_cost_basis_before_sell"])
         item["sell_proceeds_after_fees"] += number(row["sell_proceeds_after_fees"])
-        item["broker_like_realized_pnl_after_fees"] += pnl
+        item["broker_like_realized_pnl_after_fees"] += trade_pnl
         item["closed_lots"] += 1
-        if pnl > 0:
+        if cycle_pnl > 0:
             item["winning_lots"] += 1
-        elif pnl < 0:
+        elif cycle_pnl < 0:
             item["losing_lots"] += 1
 
     for adjustment in cash_adjustments or []:
+        if not is_stock_code(adjustment.stock_code):
+            continue
         key = adjustment.stock_code
         item = by_stock.setdefault(
             key,
@@ -571,12 +644,12 @@ def broker_like_realized_by_stock(
     return output
 
 
-def fifo_analytics(conn: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
+def fifo_analytics(conn: sqlite3.Connection) -> dict[str, Any]:
     trades = load_trades(conn)
     cash_adjustments = load_cash_adjustments(conn)
     display_names = display_names_by_code(trades, cash_adjustments)
     rolling_positions = rolling_cost_positions(trades, display_names)
-    broker_realized_lots = broker_like_realized_lots(trades, display_names)
+    broker_realized_lots = broker_like_realized_lots(trades, display_names, cash_adjustments)
     broker_realized_by_stock = broker_like_realized_by_stock(
         broker_realized_lots,
         display_names,

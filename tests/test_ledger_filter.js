@@ -64,6 +64,43 @@ test('stock results add in-range adjustments to in-range closed cycles', () => {
   assert.equal(rows[0].total_pnl, 108);
 });
 
+test('account cash rows are excluded from security realized and stock rows', () => {
+  const accountDataset = Object.assign({}, dataset, {
+    cycles: [],
+    trades: [],
+    adjustments: [
+      {trade_date: '2026-07-03', stock_code: '', stock_name: '账户利息', net_amount: 1.25}
+    ]
+  });
+  const window = ledger.resolveWindow(new URLSearchParams('grain=month&period=2026-07'), accountDataset.bounds);
+  const summary = ledger.summarizePeriod(accountDataset, window);
+  assert.equal(summary.realized_pnl, 0);
+  assert.deepEqual(ledger.stockResults(accountDataset, window), []);
+});
+
+test('cycle cash adjustment is not counted twice in period totals', () => {
+  const accountDataset = Object.assign({}, dataset, {
+    cycles: [{
+      status: 'closed', close_date: '2026-07-30', stock_code: '000001', stock_name: 'TEST',
+      trade_realized_pnl_after_fees: -200, cash_adjustment_amount: 15,
+      realized_pnl_after_fees: -185, holding_days: 14
+    }],
+    trades: [],
+    adjustments: [
+      {trade_date: '2026-07-17', stock_code: '000001', stock_name: 'TEST', net_amount: 20},
+      {trade_date: '2026-07-23', stock_code: '000001', stock_name: 'TEST', net_amount: -2},
+      {trade_date: '2026-07-31', stock_code: '000001', stock_name: 'TEST', net_amount: -3}
+    ]
+  });
+  const window = ledger.resolveWindow(new URLSearchParams('grain=month&period=2026-07'), accountDataset.bounds);
+  const summary = ledger.summarizePeriod(accountDataset, window);
+  const rows = ledger.stockResults(accountDataset, window);
+  assert.equal(summary.realized_pnl, -185);
+  assert.equal(rows[0].cycle_pnl, -200);
+  assert.equal(rows[0].cash_adjustments, 15);
+  assert.equal(rows[0].total_pnl, -185);
+});
+
 test('period shifting follows each calendar grain', () => {
   assert.equal(ledger.shiftPeriod('day', '2026-07-01', -1), '2026-06-30');
   assert.equal(ledger.shiftPeriod('week', '2026-07-06', 1), '2026-07-13');

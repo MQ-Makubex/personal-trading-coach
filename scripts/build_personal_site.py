@@ -629,6 +629,108 @@ def mark_to_market_summary(
     }
 
 
+def load_account_facts(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def apply_reported_account_total(mark: dict[str, Any], account_facts: dict[str, Any]) -> dict[str, Any]:
+    result = dict(mark)
+    stock_unrealized = result.get("unrealized_pnl")
+    result["stock_unrealized_pnl"] = stock_unrealized
+    result["non_stock_unrealized_pnl"] = 0.0
+    result["non_stock_positions"] = []
+    result["stock_market_value"] = result.get("market_value")
+    result["non_stock_market_value"] = 0.0
+    computed = result.get("total_pnl")
+    result["computed_total_pnl"] = computed
+    result["total_pnl_source"] = "computed"
+    result["reconciliation_difference"] = None
+    result["reconciliation_status"] = ""
+    result["reconciliation_note"] = ""
+    reported = account_facts.get("reported_total_pnl")
+    fact_date = str(account_facts.get("as_of_date") or "")
+    quote_date = str(result.get("quote_date") or "")
+    if not fact_date or fact_date != quote_date:
+        return result
+
+    non_stock_positions = []
+    for source in account_facts.get("non_stock_positions", []):
+        if not isinstance(source, dict):
+            continue
+        position = dict(source)
+        position["quantity"] = number(position.get("quantity"))
+        position["cost_basis"] = number(position.get("cost_basis"))
+        position["unrealized_pnl"] = number(position.get("unrealized_pnl"))
+        position["market_value"] = round(position["cost_basis"] + position["unrealized_pnl"], 2)
+        non_stock_positions.append(position)
+    non_stock_unrealized = round(sum(row["unrealized_pnl"] for row in non_stock_positions), 2)
+    non_stock_market_value = round(sum(row["market_value"] for row in non_stock_positions), 2)
+    result["non_stock_positions"] = non_stock_positions
+    result["non_stock_unrealized_pnl"] = non_stock_unrealized
+    result["non_stock_market_value"] = non_stock_market_value
+    if stock_unrealized is not None:
+        result["unrealized_pnl"] = round(number(stock_unrealized) + non_stock_unrealized, 2)
+    if result.get("market_value") is not None:
+        result["market_value"] = round(number(result.get("market_value")) + non_stock_market_value, 2)
+    if result.get("realized_pnl") is not None and result.get("unrealized_pnl") is not None:
+        computed = round(number(result.get("realized_pnl")) + number(result.get("unrealized_pnl")), 2)
+        result["computed_total_pnl"] = computed
+        result["total_pnl"] = computed
+
+    if computed is None or reported in {None, ""}:
+        return result
+    result["total_pnl"] = round(number(reported), 2)
+    result["total_pnl_source"] = "broker_reported"
+    result["reconciliation_difference"] = round(number(reported) - number(computed), 2)
+    result["reconciliation_status"] = str(account_facts.get("reconciliation_status") or "")
+    result["reconciliation_note"] = str(account_facts.get("reconciliation_note") or "")
+    result["reported_total_pnl_date"] = fact_date
+    return result
+
+
+def account_total_note(mark: dict[str, Any]) -> str:
+    if mark.get("total_pnl_source") != "broker_reported":
+        return (
+            f"行情截至 {mark['quote_date']}，费用已进入成本口径"
+            if mark["complete"] and mark.get("quote_date")
+            else f"缺少行情：{', '.join(mark['missing_quote_codes']) or '待核验'}"
+        )
+    if abs(number(mark.get("reconciliation_difference"))) < 0.005:
+        names = "、".join(
+            str(row.get("security_name") or "非股票资产") for row in mark.get("non_stock_positions", [])
+        )
+        asset_note = f"，含{names}浮动 {money(mark.get('non_stock_unrealized_pnl'))}" if names else ""
+        return f"券商事实值截至 {mark.get('reported_total_pnl_date')}；底账已闭合{asset_note}"
+    if mark.get("reconciliation_status") == "broker_scope_difference":
+        return (
+            f"券商事实值截至 {mark.get('reported_total_pnl_date')}；"
+            f"证券底账 {money(mark.get('computed_total_pnl'))}，差额 {money(mark.get('reconciliation_difference'))} "
+            "已确认属于历史统计口径，不是本次漏单"
+        )
+    if mark.get("reconciliation_status") == "statement_complete_valuation_scope_unresolved":
+        return (
+            f"券商事实值截至 {mark.get('reported_total_pnl_date')}；流水已逐笔闭合，"
+            f"收盘底账 {money(mark.get('computed_total_pnl'))}，差额 {money(mark.get('reconciliation_difference'))}；"
+            "估值时点或券商公式待核验"
+        )
+    if mark.get("reconciliation_status") == "securities_reconciled_account_scope_unresolved":
+        return (
+            f"券商事实值截至 {mark.get('reported_total_pnl_date')}；证券底账与持仓盯市已闭合，"
+            f"纯证券结果 {money(mark.get('computed_total_pnl'))}，差额 {money(mark.get('reconciliation_difference'))}；"
+            "券商账户级统计项目待核验"
+        )
+    return (
+        f"券商事实值截至 {mark.get('reported_total_pnl_date')}；"
+        f"底账复算 {money(mark.get('computed_total_pnl'))}，差额 {money(mark.get('reconciliation_difference'))} 待核验"
+    )
+
+
 def load_state_documents(state_dir: Path) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     for key, label, filename in STATE_SECTIONS:
@@ -839,7 +941,7 @@ def build_data(
     canonical_trades = load_trades(conn)
     cash_adjustments = load_cash_adjustments(conn)
     display_names = display_names_by_code(canonical_trades, cash_adjustments)
-    cycles = broker_like_cycles(canonical_trades, display_names)
+    cycles = broker_like_cycles(canonical_trades, display_names, cash_adjustments)
     ability = summarize_cycles(cycles)
     conn.close()
 
@@ -879,12 +981,27 @@ def build_data(
     )
     quotes = extract_latest_quotes(reports_dir, positions)
     mark_to_market = mark_to_market_summary(all_time_realized, positions, quotes)
+    account_facts = load_account_facts(state_dir / "account_facts.json")
+    mark_to_market = apply_reported_account_total(mark_to_market, account_facts)
     position_value_map = {row["stock_code"]: row for row in mark_to_market["positions"]}
     enriched_positions: list[dict[str, Any]] = []
     for position in positions:
         row = dict(position)
         row.update(position_value_map.get(str(position.get("stock_code") or ""), {}))
         enriched_positions.append(row)
+    account_positions = list(enriched_positions)
+    for position in mark_to_market.get("non_stock_positions", []):
+        account_positions.append(
+            {
+                "stock_code": str(position.get("security_code") or position.get("source_code") or ""),
+                "stock_name": str(position.get("security_name") or "非股票资产"),
+                "open_quantity": number(position.get("quantity")),
+                "unrealized_pnl": number(position.get("unrealized_pnl")),
+                "asset_type": str(position.get("asset_type") or "non_stock"),
+                "position_unit": str(position.get("position_unit") or ""),
+                "valuation_basis": str(position.get("valuation_basis") or "账户事实对账"),
+            }
+        )
 
     states = load_state_documents(state_dir)
     storyline_state = next((item for item in states if item["key"] == "position_storylines"), None)
@@ -900,9 +1017,11 @@ def build_data(
         "trades": trades,
         "activity": activity,
         "open_positions": enriched_positions,
+        "account_positions": account_positions,
         "realized_by_stock": realized_rows,
         "all_time_total_realized": all_time_realized,
         "mark_to_market": mark_to_market,
+        "account_facts": account_facts,
         "quotes": quotes,
         "documents": documents,
         "document_counts": dict(Counter(item["category"] for item in documents)),
@@ -988,15 +1107,11 @@ def metric_cell(label: str, value: Any, note: str, primary: bool = False, semant
 
 def metrics_html(data: dict[str, Any]) -> str:
     mark = data["mark_to_market"]
-    total_note = (
-        f"行情截至 {mark['quote_date']}"
-        if mark["complete"] and mark.get("quote_date")
-        else f"缺少行情：{', '.join(mark['missing_quote_codes']) or '待核验'}"
-    )
+    total_note = account_total_note(mark)
     return f"""<section class="metrics-band" aria-label="账户关键指标">
       {metric_cell('总盈亏（含持仓）', mark['total_pnl'], total_note, True)}
       {metric_cell('已实现盈亏', mark['realized_pnl'], '含交易费用及证券现金调整')}
-      {metric_cell('持仓浮动盈亏', mark['unrealized_pnl'], '最新行情市值减券商式持仓成本')}
+      {metric_cell('持仓浮动盈亏', mark['unrealized_pnl'], f"股票 {money(mark.get('stock_unrealized_pnl'))}；非股票资产 {money(mark.get('non_stock_unrealized_pnl'))}")}
       {metric_cell('总费用', data['summary'].get('total_fees'), '单独披露，不重复扣减', semantic=False)}
     </section>"""
 
@@ -1016,11 +1131,7 @@ def ability_value(value: Any, state: str, suffix: str = "") -> str:
 def render_account_facts(data: dict[str, Any]) -> str:
     mark = data["mark_to_market"]
     ability = data["ability"]
-    quote_note = (
-        f"行情截至 {mark['quote_date']}，费用已进入成本口径"
-        if mark["complete"] and mark.get("quote_date")
-        else f"缺少行情：{', '.join(mark['missing_quote_codes']) or '待核验'}"
-    )
+    quote_note = account_total_note(mark)
     holding_state = "value" if ability["average_holding_days"] is not None else "no_samples"
     median_state = "value" if ability["median_holding_days"] is not None else "no_samples"
     expectancy = money(ability["expectancy"]) if ability["expectancy"] is not None else "待积累"
@@ -1214,13 +1325,18 @@ def render_holdings(positions: list[dict[str, Any]]) -> str:
     rows = []
     for row in positions:
         code = str(row.get("stock_code") or "")
-        rows.append(
-            f"""<a class="home-position-row" href="stocks/{esc(code)}.html">
-              <span><strong>{esc(row.get('stock_name'))}</strong><small class="mono">{esc(code)}</small></span>
-              <span><small>数量</small><strong class="mono">{qty(row.get('open_quantity'))}</strong></span>
-              <span><small>浮动盈亏</small><strong class="mono {value_class(row.get('unrealized_pnl'))}">{money(row.get('unrealized_pnl'))}</strong></span>
+        unit = str(row.get("position_unit") or "")
+        content = f"""<span><strong>{esc(row.get('stock_name'))}</strong><small class="mono">{esc(code)}</small></span>
+              <span><small>数量</small><strong class="mono">{qty(row.get('open_quantity'))}{esc(unit)}</strong></span>
+              <span><small>浮动盈亏</small><strong class="mono {value_class(row.get('unrealized_pnl'))}">{money(row.get('unrealized_pnl'))}</strong></span>"""
+        if row.get("asset_type") and row.get("asset_type") != "stock":
+            rows.append(f'<div class="home-position-row" title="{esc(row.get("valuation_basis"))}">{content}</div>')
+        else:
+            rows.append(
+                f"""<a class="home-position-row" href="stocks/{esc(code)}.html">
+              {content}
             </a>"""
-        )
+            )
     return "".join(rows) or '<div class="workbench-empty">当前无持仓</div>'
 
 
@@ -1281,13 +1397,14 @@ def mentor_prompt_messages(mentor_state: dict[str, Any]) -> list[dict[str, Any]]
 
 def render_workbench(data: dict[str, Any]) -> str:
     workbench = data["workbench"]
+    account_positions = data.get("account_positions", data["open_positions"])
     return f"""<section class="today-workbench" aria-labelledby="today-workbench-title">
       <h2 class="sr-only" id="today-workbench-title">今日工作台</h2>
       {render_trade_plan(workbench)}
       {render_research_pool(workbench)}
       <div class="position-pane">
-        <div class="workbench-heading"><div><span>POSITIONS & DISCIPLINE</span><h2>当前持仓</h2></div><strong class="count-label">{len(data['open_positions'])} 支</strong></div>
-        <div class="position-list">{render_holdings(data['open_positions'])}</div>
+        <div class="workbench-heading"><div><span>POSITIONS & DISCIPLINE</span><h2>当前持仓</h2></div><strong class="count-label">{len(account_positions)} 项</strong></div>
+        <div class="position-list">{render_holdings(account_positions)}</div>
         <div class="discipline-heading"><strong>纪律消息</strong></div>
         {render_discipline_feed(data['discipline_feed'], data.get('state_source_documents', {}))}
       </div>
@@ -1594,7 +1711,7 @@ def render_ledger(data: dict[str, Any]) -> str:
     return f"""
       <header class="page-heading"><div><span class="page-context mono">ACCOUNT LEDGER</span><h1>交易底账</h1><p>费用、成交、已实现与持仓浮动使用同一套可复核口径。</p></div></header>
       {account_facts}
-      <section class="formula-band"><strong>核算公式</strong><code>总盈亏 = 已实现盈亏 + 当前持仓市值 - 券商式持仓成本</code><span>费用已进入买入成本和卖出净收入，总费用只披露，不再次扣减。</span></section>
+      <section class="formula-band"><strong>核算公式</strong><code>总盈亏 = 已实现盈亏 + 股票持仓浮动 + 非股票持仓浮动</code><span>配售、转债等资产事件单独进入开放持仓，不写成现金调整，也不改写历史个股盈亏。</span></section>
       <section class="work-surface" data-ledger-app data-page-size="20">
         <div class="section-heading"><div><h2>区间工作台</h2><p>统计、流水和单票结果共享同一日期区间。</p></div></div>
         <div class="segmented" role="group" aria-label="时间粒度">
@@ -1747,6 +1864,8 @@ def render_cycle_panel(cycle: dict[str, Any], selected: bool) -> str:
         market_facts = f"""
           <div><dt>总买入成本</dt><dd class="mono">{money(cycle.get('buy_cost_after_fees'))}</dd></div>
           <div><dt>净卖出收入</dt><dd class="mono">{money(cycle.get('sell_proceeds_after_fees'))}</dd></div>
+          <div><dt>交易盈亏</dt><dd class="mono {value_class(cycle.get('trade_realized_pnl_after_fees'))}">{money(cycle.get('trade_realized_pnl_after_fees'))}</dd></div>
+          <div><dt>红利与扣税</dt><dd class="mono {value_class(cycle.get('cash_adjustment_amount'))}">{money(cycle.get('cash_adjustment_amount'))}</dd></div>
           <div><dt>收益率</dt><dd class="mono {value_class(cycle.get('return_pct'))}">{pct(cycle.get('return_pct'))}</dd></div>
         """
     hidden = "" if selected else " hidden"
