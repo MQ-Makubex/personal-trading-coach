@@ -8,7 +8,8 @@ const {chromium} = await import(pathToFileURL(playwrightPath).href);
 const baseUrl = process.argv[2] || 'http://127.0.0.1:8765';
 const outputDir = process.argv[3] || 'reports/personal_site/qa';
 fs.mkdirSync(outputDir, {recursive: true});
-const browser = await chromium.launch({headless: true});
+const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+const browser = await chromium.launch(Object.assign({headless: true}, executablePath ? {executablePath} : {}));
 
 async function inspect(name, viewport) {
   const page = await browser.newPage({viewport});
@@ -76,6 +77,23 @@ async function inspect(name, viewport) {
   await page.goto(`${baseUrl}/modes.html`, {waitUntil: 'networkidle'});
   await page.locator('[data-mode-filter="validating"]').click();
   const modeUrlUpdated = page.url().includes('status=validating');
+  await page.goto(`${baseUrl}/mode-validation.html`, {waitUntil: 'networkidle'});
+  const modeValidation = await page.evaluate(() => {
+    const root = document.documentElement;
+    const risk = document.querySelector('.mode-validation-risk');
+    const workspace = document.querySelector('.mode-validation-workspace');
+    return {
+      modeValidationNoHorizontalScroll: root.scrollWidth <= root.clientWidth + 1,
+      modeValidationRiskFirst: Boolean(risk && workspace && (risk.compareDocumentPosition(workspace) & Node.DOCUMENT_POSITION_FOLLOWING)),
+      modeValidationFiveTabs: document.querySelectorAll('[data-mode-validation-tab]').length === 5,
+      modeValidationStaticReadOnly: document.querySelector('[data-mode-validation-surface]')?.textContent?.trim() === '线上只读' && document.querySelectorAll('[data-local-write]').length === 0,
+      modeValidationNoStoredToken: !location.search.includes('token') && localStorage.length === 0 && sessionStorage.length === 0
+    };
+  });
+  await page.locator('[data-mode-validation-tab="runs"]').click();
+  const modeValidationTabWorks = await page.locator('[data-mode-validation-panel="runs"]').isVisible();
+  const modeValidationUrlUpdated = page.url().includes('tab=runs');
+  await page.screenshot({path: path.join(outputDir, `mode-validation-${name}.png`), fullPage: true});
   await page.goto(`${baseUrl}/mentor.html`, {waitUntil: 'networkidle'});
   const mentorSkipLinkHidden = await page.locator('.skip-link').evaluate(node => node.getBoundingClientRect().bottom <= 0);
   const mentorModeCountCorrect = await page.locator('[data-mentor-item]').count() === 13;
@@ -105,6 +123,9 @@ async function inspect(name, viewport) {
     storyExists,
     cycleUrlUpdated,
     modeUrlUpdated,
+    ...modeValidation,
+    modeValidationTabWorks,
+    modeValidationUrlUpdated,
     mentorSkipLinkHidden,
     mentorModeCountCorrect,
     mentorUrlUpdated,

@@ -1,0 +1,3 @@
+# Own selected research capabilities
+
+Vibe-Trading will remain a source of design references rather than a runtime dependency, MCP sidecar, or owner of personal trading state. “Reference” here means inspecting the pinned source version for its implemented Skill workflows, deterministic Tool contracts, research artifacts, and lifecycle patterns; it does not mean a general search for third-party alternatives. The project will implement only the capabilities that strengthen its own mode-validation domain model, keeping their contracts, evidence standards, privacy behavior, and upgrade path under local control instead of adapting Vibe-Trading's broader agent and execution architecture.

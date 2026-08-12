@@ -26,6 +26,7 @@ from ledger_analytics import (
     load_trades,
     number,
 )
+from mode_validation_projection import build_mode_validation_projection
 from personal_site_metrics import summarize_cycles
 from personal_site_state import load_discipline_feed, load_mentor_lenses, load_trading_modes
 from render_markdown import render_markdown
@@ -36,6 +37,7 @@ DEFAULT_SQLITE = ROOT / "state" / "account_ledger.sqlite"
 DEFAULT_REPORTS = ROOT / "reports"
 DEFAULT_STATE = ROOT / "state"
 DEFAULT_OUTPUT = DEFAULT_REPORTS / "personal_site"
+DEFAULT_MODE_VALIDATION_DB = DEFAULT_STATE / "mode_validation.sqlite"
 ASSET_SOURCE = ROOT / "templates" / "personal_site"
 
 
@@ -65,6 +67,7 @@ NAV_ITEMS = (
     ("timeline", "训练时间线", "timeline.html"),
     ("stories", "股票故事", "stories.html"),
     ("modes", "交易模式", "modes.html"),
+    ("mode_validation", "模式验证", "mode-validation.html"),
     ("mentor", "导师视角", "mentor.html"),
     ("ledger", "交易底账", "ledger.html"),
     ("rules", "纪律规则", "rules.html"),
@@ -947,6 +950,7 @@ def build_data(
 
     documents = collect_timeline_documents(reports_dir, output_dir)
     trading_state = load_trading_modes(state_dir / "trading_modes.json", {row["cycle_id"]: row for row in cycles})
+    mode_validation = build_mode_validation_projection(state_dir / "mode_validation.sqlite", trading_state)
     mentor_state = load_mentor_lenses(state_dir / "mentor_lenses.json")
     discipline_feed = load_discipline_feed(state_dir / "discipline_feed.json")
     discipline_feed = {
@@ -1030,6 +1034,7 @@ def build_data(
         "ability": ability,
         "ledger_dataset": ledger_dataset,
         "trading_state": trading_state,
+        "mode_validation": mode_validation,
         "discipline_feed": discipline_feed,
         "mentor_state": mentor_state,
         "state_source_documents": state_source_documents,
@@ -1492,6 +1497,71 @@ def render_stories(data: dict[str, Any]) -> str:
     """
 
 
+MODE_VALIDATION_TAB_COPY = (
+    ("overview", "任务概览"),
+    ("propositions", "模式命题"),
+    ("evidence", "研究证据"),
+    ("runs", "验证运行"),
+    ("reviews", "评审历史"),
+)
+
+
+def render_mode_validation(data: dict[str, Any]) -> str:
+    projection = data.get("mode_validation", {})
+    modes = projection.get("modes", [])
+    tasks = projection.get("tasks", [])
+    risk_groups = projection.get("risk_queue", [])
+    selected_mode = str(modes[0].get("id") or "") if modes else ""
+    selected_task = next(
+        (str(task.get("task_id") or "") for task in tasks if task.get("status") == "active"),
+        str(tasks[0].get("task_id") or "") if tasks else "",
+    )
+    mode_options = "".join(
+        f'<option value="{esc(mode.get("id"))}"{(" selected" if str(mode.get("id")) == selected_mode else "")}>{esc(mode.get("name") or mode.get("id"))} · v{esc(mode.get("version"))}</option>'
+        for mode in modes
+    ) or '<option value="">尚无交易模式</option>'
+    task_options = "".join(
+        f'<option value="{esc(task.get("task_id"))}" data-mode-id="{esc(task.get("mode_id"))}"{(" selected" if str(task.get("task_id")) == selected_task else "")}>{esc(task.get("status"))} · {esc(task.get("created_at"))}</option>'
+        for task in tasks
+        if str(task.get("mode_id") or "") == selected_mode
+    ) or '<option value="">尚未建立验证任务</option>'
+    risk_html = []
+    for group in risk_groups:
+        items = "".join(
+            f'<li><strong>{esc(item.get("label"))}</strong><small class="mono">{esc(item.get("id"))}</small></li>'
+            for item in group.get("items", [])
+        ) or '<li class="mode-validation-risk-clear">当前无此类事项</li>'
+        risk_html.append(
+            f'<section class="mode-validation-risk-group" data-risk-kind="{esc(group.get("kind"))}"><header><h3>{esc(group.get("label"))}</h3><span class="mono">{int(number(group.get("count")))}</span></header><ul>{items}</ul></section>'
+        )
+    tabs = "".join(
+        f'<button type="button" role="tab" id="modeValidationTab-{key}" aria-controls="modeValidationPanel-{key}" aria-selected="{str(index == 0).lower()}" tabindex="{0 if index == 0 else -1}" data-mode-validation-tab="{key}">{label}</button>'
+        for index, (key, label) in enumerate(MODE_VALIDATION_TAB_COPY)
+    )
+    panels = "".join(
+        f'<section role="tabpanel" id="modeValidationPanel-{key}" aria-labelledby="modeValidationTab-{key}" data-mode-validation-panel="{key}"{("" if index == 0 else " hidden")}><div class="mode-validation-panel-body" data-mode-validation-panel-body="{key}"><div class="mode-validation-loading">正在读取{label}。</div></div></section>'
+        for index, (key, label) in enumerate(MODE_VALIDATION_TAB_COPY)
+    )
+    projection_json = json.dumps(projection, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
+    return f"""
+      <header class="page-heading mode-validation-heading"><div><span class="page-context mono">MODE VALIDATION</span><h1>模式验证</h1><p>把个人交易模式拆成可证伪命题，用冻结样本、审计证据和人工结论持续验证。</p></div><div class="mode-validation-surface"><span>当前表面</span><strong data-mode-validation-surface>线上只读</strong><small data-mode-validation-session-state>本机服务连接后启用写入</small></div></header>
+      <section class="mode-validation-layout" data-mode-validation-app data-selected-mode="{esc(selected_mode)}" data-selected-task="{esc(selected_task)}">
+        <aside class="mode-validation-risk" aria-labelledby="modeValidationRiskTitle"><header class="mode-validation-risk-heading"><div><h2 id="modeValidationRiskTitle">验证风险队列</h2><p>先处理失效与阻塞，再看运行结果。</p></div><strong class="mono">{sum(int(number(group.get('count'))) for group in risk_groups)}</strong></header>{''.join(risk_html)}</aside>
+        <div class="mode-validation-workspace">
+          <section class="mode-validation-context" aria-label="模式验证上下文">
+            <label><span>交易模式</span><select id="modeValidationMode">{mode_options}</select></label>
+            <label><span>验证任务</span><select id="modeValidationTask">{task_options}</select></label>
+            <div class="mode-validation-context-status"><span>数据生成时间</span><strong class="mono">{esc(projection.get('generated_at') or data.get('generated_at'))}</strong></div>
+          </section>
+          <div class="mode-validation-feedback" data-mode-validation-feedback aria-live="polite"></div>
+          <div class="mode-validation-tabs" role="tablist" aria-label="模式验证内容">{tabs}</div>
+          <div class="mode-validation-panels">{panels}</div>
+        </div>
+      </section>
+      <script type="application/json" id="modeValidationData">{projection_json}</script>
+    """
+
+
 def mode_definition_row(label: str, values: Any) -> str:
     if isinstance(values, list):
         content = "".join(f"<li>{esc(value)}</li>" for value in values) or "<li>待补充</li>"
@@ -1950,6 +2020,7 @@ def public_site_data(data: dict[str, Any]) -> dict[str, Any]:
         "ledger_dataset": data["ledger_dataset"],
         "trading_state": data["trading_state"],
         "modes": data["trading_state"].get("modes", []),
+        "mode_validation": data["mode_validation"],
         "discipline_feed": data["discipline_feed"],
         "mentor_state": data["mentor_state"],
         "state_source_documents": data["state_source_documents"],
@@ -1976,12 +2047,14 @@ def write_site(
     (assets_dir / "site.css").write_text((ASSET_SOURCE / "site.css").read_text(encoding="utf-8"), encoding="utf-8")
     (assets_dir / "site.js").write_text((ASSET_SOURCE / "site.js").read_text(encoding="utf-8"), encoding="utf-8")
     (assets_dir / "ledger.js").write_text((ASSET_SOURCE / "ledger.js").read_text(encoding="utf-8"), encoding="utf-8")
+    (assets_dir / "mode-validation.js").write_text((ASSET_SOURCE / "mode-validation.js").read_text(encoding="utf-8"), encoding="utf-8")
 
     pages = {
         "index": output_dir / "index.html",
         "timeline": output_dir / "timeline.html",
         "stories": output_dir / "stories.html",
         "modes": output_dir / "modes.html",
+        "mode_validation": output_dir / "mode-validation.html",
         "mentor": output_dir / "mentor.html",
         "ledger": output_dir / "ledger.html",
         "rules": output_dir / "rules.html",
@@ -1991,6 +2064,16 @@ def write_site(
     pages["timeline"].write_text(page_shell("训练时间线", "timeline", render_timeline(data), data["generated_at"]), encoding="utf-8")
     pages["stories"].write_text(page_shell("股票故事", "stories", render_stories(data), data["generated_at"]), encoding="utf-8")
     pages["modes"].write_text(page_shell("交易模式", "modes", render_modes(data), data["generated_at"]), encoding="utf-8")
+    pages["mode_validation"].write_text(
+        page_shell(
+            "模式验证",
+            "mode_validation",
+            render_mode_validation(data),
+            data["generated_at"],
+            extra_scripts=("assets/mode-validation.js",),
+        ),
+        encoding="utf-8",
+    )
     pages["mentor"].write_text(page_shell("导师视角", "mentor", render_mentor(data), data["generated_at"]), encoding="utf-8")
     pages["ledger"].write_text(
         page_shell(
@@ -2035,7 +2118,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     args = parser.parse_args()
     written = write_site(args.sqlite, args.reports, args.output, state_dir=args.state)
-    for key in ("index", "timeline", "stories", "modes", "mentor", "ledger", "rules", "data"):
+    for key in ("index", "timeline", "stories", "modes", "mode_validation", "mentor", "ledger", "rules", "data"):
         print(f"{key}: {written[key]}")
     return 0
 

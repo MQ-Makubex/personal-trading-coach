@@ -886,7 +886,7 @@ class SiteGenerationTests(unittest.TestCase):
             written = site.write_site(sqlite_path, reports, output, state_dir=state, as_of_date=date(2026, 7, 11))
             assert_generated_site_integrity(self, output)
 
-            expected_pages = {"index", "timeline", "stories", "modes", "mentor", "ledger", "rules", "data"}
+            expected_pages = {"index", "timeline", "stories", "modes", "mode_validation", "mentor", "ledger", "rules", "data"}
             self.assertTrue(expected_pages.issubset(written))
             for key in expected_pages:
                 self.assertTrue(written[key].exists(), key)
@@ -895,9 +895,11 @@ class SiteGenerationTests(unittest.TestCase):
             timeline_html = written["timeline"].read_text(encoding="utf-8")
             stories_html = written["stories"].read_text(encoding="utf-8")
             modes_html = written["modes"].read_text(encoding="utf-8")
+            mode_validation_html = written["mode_validation"].read_text(encoding="utf-8")
             mentor_html = written["mentor"].read_text(encoding="utf-8")
             ledger_html = written["ledger"].read_text(encoding="utf-8")
             ledger_js_exists = (output / "assets" / "ledger.js").exists()
+            mode_validation_js_exists = (output / "assets" / "mode-validation.js").exists()
             rules_html = written["rules"].read_text(encoding="utf-8")
             detail_pages = sorted((output / "documents").glob("*.html"))
             stock_pages = sorted((output / "stocks").glob("*.html"))
@@ -911,6 +913,7 @@ class SiteGenerationTests(unittest.TestCase):
 
         self.assertIn('href="timeline.html"', index_html)
         self.assertIn('href="modes.html"', index_html)
+        self.assertIn('href="mode-validation.html"', index_html)
         self.assertIn('href="mentor.html"', index_html)
         self.assertIn("交易模式", modes_html)
         self.assertIn('data-mode-app', modes_html)
@@ -933,6 +936,14 @@ class SiteGenerationTests(unittest.TestCase):
         )
         self.assertIn(f'href="stocks/000001.html?cycle={closed_cycle_id}"', modes_html)
         self.assertNotIn("自动升级", modes_html)
+        self.assertIn("模式验证", mode_validation_html)
+        self.assertIn('data-mode-validation-app', mode_validation_html)
+        self.assertIn('id="modeValidationData"', mode_validation_html)
+        self.assertNotIn("X-Workbench-Token", mode_validation_html)
+        self.assertNotIn('data-local-write', mode_validation_html)
+        for tab_name in ("任务概览", "模式命题", "研究证据", "验证运行", "评审历史"):
+            self.assertIn(tab_name, mode_validation_html)
+        self.assertTrue(mode_validation_js_exists)
         self.assertIn("冰冰小美交易视角", mentor_html)
         self.assertIn('data-mentor-app', mentor_html)
         self.assertIn('id="mentor-mode-macro-risk-gate"', mentor_html)
